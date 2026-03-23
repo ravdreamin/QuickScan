@@ -1,6 +1,15 @@
-def main():
-    print("Hello from backend!")
+from fastapi import FastAPI
+from app.api import auth
 
+app = FastAPI(
+    title="QuickScan 2.0 API",
+    description="Secure QR-Based Attendance Platform",
+    version="2.0.0"
+)
 
-if __name__ == "__main__":
-    main()
+# Connect the auth routes to the main app
+app.include_router(auth.router)
+
+@app.get("/")
+async def root():
+    return {"message": "QuickScan 2.0 API is running."}
