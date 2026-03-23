@@ -7,6 +7,13 @@ class LoginRequest(BaseModel):
     password: str
     hardware_id: str
 
+class RegisterRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+    role: str # "TEACHER" or "STUDENT"
+    hardware_id: str
+
 
 class GoogleLoginRequest(BaseModel):
     google_id_token: str
