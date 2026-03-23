@@ -5,7 +5,7 @@ import { api, getUser, logout, isLoggedIn } from '../lib/api';
 import {
   ScanFace, LogOut, Play, RefreshCw, Plus, UserPlus, ShieldCheck,
   Clock, MapPin, Users, AlertCircle, X, Download, BarChart3,
-  FileSpreadsheet, Shield, ChevronDown, Activity
+  FileSpreadsheet, Shield, Activity
 } from 'lucide-react';
 
 interface SessionItem {
@@ -40,7 +40,6 @@ export default function Dashboard() {
   // QR state
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [qrPayload, setQrPayload] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
 
   // Create session modal
   const [showCreate, setShowCreate] = useState(false);
@@ -81,12 +80,11 @@ export default function Dashboard() {
   };
 
   const generateQR = async (sessionId: string) => {
-    setLoading(true); setError(''); setActiveSessionId(sessionId);
+    setError(''); setActiveSessionId(sessionId);
     try {
       const { data } = await api.get(`/sessions/${sessionId}/qr`);
       setQrPayload(data);
     } catch (err: any) { setError(err.response?.data?.detail || 'Failed to generate QR.'); }
-    finally { setLoading(false); }
   };
 
   const handleCreateSession = async (e: React.FormEvent) => {
