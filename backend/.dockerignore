@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+test_scan_flow.py
+e2e_test.py
+alembic/versions/*

@@ -1,7 +1,8 @@
 import axios from 'axios';
 
-// Use the same hostname the browser is on — enables phone testing on LAN
-const API_URL = `http://${window.location.hostname}:8000`;
+// Production: set VITE_API_URL in Vercel env vars (e.g. https://quickscan-api.up.railway.app)
+// Development: auto-detects hostname for LAN phone testing
+const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000`;
 
 export const api = axios.create({
   baseURL: API_URL,

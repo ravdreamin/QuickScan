@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import app.models  # noqa: F401
 
 from app.api import auth, qr, attendance, sessions, audit
+from app.core.config import settings
 
 app = FastAPI(
     title="QuickScan 2.0 API",
@@ -12,9 +13,12 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# CORS — support both dev (any origin) and production (specific frontend)
+origins = settings.FRONTEND_URL.split(",") if settings.FRONTEND_URL != "*" else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
