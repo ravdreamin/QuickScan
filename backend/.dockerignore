@@ -4,4 +4,3 @@ __pycache__/
 .env
 test_scan_flow.py
 e2e_test.py
-alembic/versions/*
