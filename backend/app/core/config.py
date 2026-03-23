@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     PASETO_SECRET_KEY: str
+    GOOGLE_CLIENT_ID: str = ""
 
     @computed_field
     @property

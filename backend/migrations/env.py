@@ -13,6 +13,8 @@ from app.models.user import User  # Must import to register with Base.metadata
 from app.models.session import Session
 from app.models.enrollment import Enrollment
 from app.models.organization import Organization, Department
+from app.models.attendance import Attendance
+from app.models.ledger import AuditLedger
 
 # Alembic Config object
 config = context.config

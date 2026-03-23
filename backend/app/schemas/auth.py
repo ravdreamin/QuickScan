@@ -1,0 +1,18 @@
+from uuid import UUID
+from pydantic import BaseModel, EmailStr
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+    hardware_id: str
+
+
+class GoogleLoginRequest(BaseModel):
+    google_id_token: str
+    hardware_id: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "paseto"
