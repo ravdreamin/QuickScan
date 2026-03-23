@@ -39,24 +39,52 @@ export function useGoogleSignIn(
   }, [navigate, onError]);
 
   useEffect(() => {
-    // Wait for the GSI script to load
+    let attempts = 0;
+    const maxAttempts = 50; // 10 seconds max
+
     const timer = setInterval(() => {
+      attempts++;
+
+      // After 10 seconds, show a helpful error
+      if (attempts >= maxAttempts) {
+        clearInterval(timer);
+        console.warn('[QuickScan] Google Sign-In failed to load after 10s');
+        // Show a manual fallback message
+        if (containerRef.current) {
+          containerRef.current.innerHTML = `
+            <p style="font-size:12px;color:#999;text-align:center;padding:8px;">
+              Google Sign-In unavailable.<br/>Use email/password below.
+            </p>`;
+        }
+        return;
+      }
+
       if (window.google?.accounts?.id && containerRef.current) {
         clearInterval(timer);
 
-        window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: handleCredentialResponse,
-        });
+        try {
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: handleCredentialResponse,
+          });
 
-        window.google.accounts.id.renderButton(containerRef.current, {
-          theme: 'outline',
-          size: 'large',
-          width: containerRef.current.offsetWidth,
-          text: 'continue_with',
-          shape: 'rectangular',
-          logo_alignment: 'left',
-        });
+          window.google.accounts.id.renderButton(containerRef.current, {
+            theme: 'outline',
+            size: 'large',
+            width: containerRef.current.offsetWidth || 320,
+            text: 'continue_with',
+            shape: 'rectangular',
+            logo_alignment: 'left',
+          });
+        } catch (err) {
+          console.error('[QuickScan] Google Sign-In render error:', err);
+          if (containerRef.current) {
+            containerRef.current.innerHTML = `
+              <p style="font-size:12px;color:#e03e3e;text-align:center;padding:8px;">
+                Google Sign-In error. Use email/password below.
+              </p>`;
+          }
+        }
       }
     }, 200);
 
