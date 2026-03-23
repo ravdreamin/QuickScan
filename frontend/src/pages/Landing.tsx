@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { isLoggedIn, getUser } from '../lib/api';
 import { useEffect } from 'react';
-import { ScanFace, ShieldCheck, MapPin, Smartphone, ArrowRight, Zap } from 'lucide-react';
+import { ScanFace, ShieldCheck, MapPin, Smartphone, ArrowRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { Variants } from 'framer-motion';
 
@@ -60,18 +60,7 @@ export default function Landing() {
           variants={staggerContainer} initial="hidden" animate="visible"
           style={{ maxWidth: 720, position: 'relative', zIndex: 1 }}
         >
-          <motion.div variants={fadeUp}>
-            <div style={{ 
-              display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', 
-              background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', 
-              borderRadius: 99, fontSize: 13, fontWeight: 500, marginBottom: 24,
-              boxShadow: '0 4px 20px rgba(0,0,0,0.04)'
-            }}>
-              <Zap size={14} color="var(--accent-primary)" /> Enterprise Anti-Proxy Attendance
-            </div>
-          </motion.div>
-
-          <motion.h1 variants={fadeUp} style={{ fontSize: 'clamp(2.5rem, 6vw, 4rem)', lineHeight: 1.1, marginBottom: 24, letterSpacing: '-0.04em', fontWeight: 800 }}>
+          <motion.h1 variants={fadeUp} style={{ fontSize: 'clamp(2.5rem, 6vw, 4.5rem)', lineHeight: 1.1, marginBottom: 24, letterSpacing: '-0.04em', fontWeight: 800 }}>
             Secure QR-based attendance <br/> for modern institutions
           </motion.h1>
 
