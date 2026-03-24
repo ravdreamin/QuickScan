@@ -31,6 +31,6 @@ class User(Base):
     )
 
     # The hardware lock. Starts as NULL.
-    device_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    device_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))

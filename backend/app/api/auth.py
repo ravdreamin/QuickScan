@@ -28,8 +28,15 @@ async def _hardware_lock_and_token(
 ) -> dict:
     if user.device_id is None:
         user.device_id = hardware_id
-        await db.commit()
-        await db.refresh(user)
+        try:
+            await db.commit()
+            await db.refresh(user)
+        except Exception:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not lock device. Try logging in again.",
+            )
     elif user.device_id != hardware_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
