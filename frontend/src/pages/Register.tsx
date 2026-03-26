@@ -1,8 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ScanFace, User, AlertCircle, UserPlus } from 'lucide-react';
 import { api, getHardwareId, saveAuth, isLoggedIn, getUser } from '../lib/api';
-import { useGoogleSignIn } from '../lib/useGoogleSignIn';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -12,9 +11,6 @@ export default function Register() {
   const [role, setRole] = useState<'student' | 'teacher'>('student');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const googleBtnRef = useRef<HTMLDivElement>(null);
-
-  useGoogleSignIn(googleBtnRef, setError);
 
   useEffect(() => {
     if (isLoggedIn()) {
@@ -62,15 +58,6 @@ export default function Register() {
           </div>
 
           {error && <div className="alert alert-error animate-fade-in"><AlertCircle size={16} />{error}</div>}
-
-          {/* Google Sign-In/Up Button */}
-          <div ref={googleBtnRef} style={{ marginBottom: 24, display: 'flex', justifyContent: 'center' }}></div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-            <div style={{ flex: 1, height: 1, background: 'var(--border-color)' }}></div>
-            <span style={{ fontSize: 12, color: 'var(--text-placeholder)', fontWeight: 500 }}>OR</span>
-            <div style={{ flex: 1, height: 1, background: 'var(--border-color)' }}></div>
-          </div>
 
           {/* Role toggle */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 24, padding: 4, background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>

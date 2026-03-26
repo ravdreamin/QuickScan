@@ -2,7 +2,6 @@
 Authentication routes:
   - POST /auth/register       (create account)
   - POST /auth/login          (email + password + hardware lock)
-  - POST /auth/google-login   (Google OAuth2 ID-token + hardware lock)
   - GET  /auth/me             (return current user profile from token)
 """
 
@@ -14,7 +13,7 @@ from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.core.security import verify_password, create_paseto_token, get_password_hash
 from app.core.config import settings
-from app.schemas.auth import LoginRequest, GoogleLoginRequest, TokenResponse, RegisterRequest
+from app.schemas.auth import LoginRequest, TokenResponse, RegisterRequest
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -117,58 +116,3 @@ async def login(credentials: LoginRequest, db: AsyncSession = Depends(get_db)):
         )
 
     return await _hardware_lock_and_token(user, credentials.hardware_id, db)
-
-
-# ---------------------------------------------------------------------------
-# POST /auth/google-login   (Google OAuth2 ID-token)
-# ---------------------------------------------------------------------------
-@router.post("/google-login", response_model=TokenResponse)
-async def google_login(
-    payload: GoogleLoginRequest, db: AsyncSession = Depends(get_db)
-):
-    if not settings.GOOGLE_CLIENT_ID:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Google OAuth is not configured on this server.",
-        )
-
-    try:
-        from google.oauth2 import id_token as google_id_token
-        from google.auth.transport import requests as google_requests
-
-        id_info = google_id_token.verify_oauth2_token(
-            payload.google_id_token,
-            google_requests.Request(),
-            settings.GOOGLE_CLIENT_ID,
-        )
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Google ID token.",
-        )
-
-    email: str = id_info.get("email")
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Google token did not contain an email.",
-        )
-
-    query = select(User).where(User.email == email)
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        import secrets
-
-        user = User(
-            email=email,
-            full_name=id_info.get("name", email.split("@")[0]),
-            hashed_password=get_password_hash(secrets.token_urlsafe(32)),
-            role=UserRole.STUDENT,
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-
-    return await _hardware_lock_and_token(user, payload.hardware_id, db)
