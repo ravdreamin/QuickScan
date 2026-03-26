@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { isLoggedIn, getUser } from '../lib/api';
+import { isLoggedIn } from '../lib/api';
 import { useEffect } from 'react';
 import { ScanFace, ShieldCheck, MapPin, ArrowRight, CheckCircle2, QrCode, Lock } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -10,8 +10,7 @@ export default function Landing() {
 
   useEffect(() => {
     if (isLoggedIn()) {
-      const u = getUser();
-      navigate(u?.role === 'student' ? '/scan' : '/dashboard');
+      navigate('/dashboard');
     }
   }, [navigate]);
 

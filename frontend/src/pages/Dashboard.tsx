@@ -4,8 +4,8 @@ import { QRCodeSVG } from 'qrcode.react';
 import { api, getUser, logout, isLoggedIn } from '../lib/api';
 import {
   ScanFace, LogOut, Play, RefreshCw, Plus, UserPlus, ShieldCheck,
-  Clock, MapPin, Users, AlertCircle, X,
-  FileSpreadsheet, Shield, Activity
+  Clock, MapPin, Users, AlertCircle, X, BookOpen, Sparkles,
+  FileSpreadsheet, Shield, Activity, CalendarDays, BarChart3
 } from 'lucide-react';
 
 interface SessionItem {
@@ -152,6 +152,7 @@ export default function Dashboard() {
   const [studentsSessionId, setStudentsSessionId] = useState('');
 
   const [studentStats, setStudentStats] = useState<StudentDashboardStats | null>(null);
+  const [studentView, setStudentView] = useState<'stats' | 'sessions'>('sessions');
 
   // Student join code
   const [joinCode, setJoinCode] = useState('');
@@ -276,6 +277,7 @@ export default function Dashboard() {
     try {
       const { data } = await api.post('/sessions/join', { code: joinCode.trim() });
       setJoinMsg(data.message); setJoinCode('');
+      setStudentView('sessions');
       // Reload stats after successful join
       fetchStudentStats();
     } catch (err: any) { setJoinMsg(err.response?.data?.detail || 'Failed to join session.'); }
@@ -388,6 +390,10 @@ export default function Dashboard() {
 
   const selectedRegisterSession = sessions.find((session) => session.id === registerSessionId) ?? null;
   const selectedStudentsSession = sessions.find((session) => session.id === studentsSessionId) ?? null;
+  const studentAttendanceRate = studentStats?.overall.total_classes
+    ? Math.round((studentStats.overall.total_attended / studentStats.overall.total_classes) * 100)
+    : 0;
+  const recentStudentAttendance = studentStats ? [...studentStats.attendance_register].slice(0, 6) : [];
 
   const jumpToStudentDetails = (studentId: string) => {
     setHighlightStudentId(studentId);
@@ -411,91 +417,229 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      <div className="container" style={{ maxWidth: 1200, paddingTop: 32, paddingBottom: 40, flex: 1 }}>
+      <div className={`container ${isStudent ? 'dashboard-mobile-wrap' : ''}`} style={{ maxWidth: 1200, paddingTop: 32, paddingBottom: 40, flex: 1 }}>
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <div className={`dashboard-header-row ${isStudent ? 'student-dashboard-title' : ''}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <h1 style={{ fontSize: '1.75rem' }}>Dashboard</h1>
-          {isStudent ? (
-            <Link to="/scan" className="btn-primary" style={{ textDecoration: 'none' }}><ScanFace size={16} /> Scan QR</Link>
-          ) : (
+          {!isStudent ? (
             <button className="btn-primary" onClick={() => setShowCreate(true)}><Plus size={16} /> New Session</button>
-          )}
+          ) : <div />}
         </div>
 
         {error && <div className="alert alert-error animate-fade-in" style={{ marginBottom: 16 }}><AlertCircle size={16} />{error}</div>}
 
         {/* ═══ STUDENT VIEW ═══ */}
         {isStudent ? (
-          <div>
+          <div className="student-mobile-shell" style={{ maxWidth: 760, margin: '0 auto' }}>
             {studentStats ? (
-              <div className="animate-fade-in">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 32 }}>
-                  <StatCard label="Total Classes" value={studentStats.overall.total_classes} icon={<FileSpreadsheet size={20} />} />
-                  <StatCard label="Attended" value={studentStats.overall.total_attended} icon={<ShieldCheck size={20} />} color="var(--success)" />
-                  <StatCard label="Missed" value={studentStats.overall.total_missed} icon={<X size={20} />} color="var(--error)" />
-                  <StatCard label="Overall Rate" value={`${studentStats.overall.total_classes ? Math.round((studentStats.overall.total_attended / studentStats.overall.total_classes) * 100) : 0}%`} icon={<Activity size={20} />} color="var(--accent-primary)" />
-                </div>
-                
-                <div className="notion-block has-border" style={{ marginBottom: 32, padding: 24, background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
-                  <div>
-                    <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Join a New Session</h3>
-                    <p className="text-secondary" style={{ fontSize: 13 }}>Ask your teacher for the 6-character enrollment code.</p>
+              <div className="animate-fade-in student-mobile-content">
+                <div className="student-hero-card notion-block has-border">
+                  <div className="student-hero-top">
+                    <div>
+                      <p className="student-hero-kicker">Attendance Hub</p>
+                      <h2 style={{ fontSize: 24, marginBottom: 4 }}>Hi, {studentStats.profile.full_name}</h2>
+                      <p className="text-secondary" style={{ fontSize: 13 }}>
+                        Join class session first, then mark attendance using scan.
+                      </p>
+                    </div>
+                    <button type="button" className="btn-primary student-scan-inline" onClick={() => navigate('/scan')}>
+                      <ScanFace size={15} /> Scan
+                    </button>
                   </div>
-                  <form onSubmit={handleJoinSession} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <input className="input-base" style={{ width: 140, textTransform: 'uppercase' }} placeholder="e.g. A1B2C3" value={joinCode} onChange={e => setJoinCode(e.target.value)} maxLength={6} required />
-                    <button type="submit" className="btn-primary" disabled={joining}>{joining ? 'Joining…' : 'Join'}</button>
-                  </form>
-                  {joinMsg && <div style={{ flexBasis: '100%', fontSize: 13, color: joinMsg.includes('Success') ? 'var(--success)' : 'var(--error)' }}>{joinMsg}</div>}
+
+                  <div className="student-rate-row">
+                    <p className="student-rate-value">
+                      {studentAttendanceRate}
+                      <span>%</span>
+                    </p>
+                    <p className="text-secondary">overall attendance</p>
+                  </div>
+
+                  <div className="student-progress-track">
+                    <div className="student-progress-fill" style={{ width: `${studentAttendanceRate}%` }} />
+                  </div>
+
+                  <div className="student-chip-row">
+                    <span className="student-chip">{studentStats.overall.total_classes} classes</span>
+                    <span className="student-chip">{studentStats.overall.total_missed} missed</span>
+                    <span className="student-chip">Roll: {studentStats.profile.roll_no}</span>
+                  </div>
                 </div>
 
-                <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>My Courses</h2>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-                  {studentStats.by_course.map((c, i) => (
-                    <div key={i} className="notion-block" style={{ padding: 20, border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
-                      <h3 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>{c.course_name}</h3>
-                      <div style={{ display: 'flex', gap: 12, fontSize: 13, background: 'var(--bg-secondary)', padding: 12, borderRadius: 'var(--radius-md)' }}>
-                        <div style={{ flex: 1 }}>
-                          <span className="text-secondary" style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>Total</span>
-                          <span style={{ fontWeight: 600 }}>{c.total_classes}</span>
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <span className="text-secondary" style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>Attended</span>
-                          <span style={{ fontWeight: 600, color: 'var(--success)' }}>{c.attended}</span>
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <span className="text-secondary" style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>Missed</span>
-                          <span style={{ fontWeight: 600, color: 'var(--error)' }}>{c.missed}</span>
-                        </div>
+                <div className="student-top-tabs" style={{ marginBottom: 12 }}>
+                  {([
+                    ['stats', 'Stats'],
+                    ['sessions', 'Sessions'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className="btn-ghost"
+                      style={{
+                        flex: 1,
+                        background: studentView === key ? 'var(--bg-elevated)' : 'transparent',
+                        border: studentView === key ? '1px solid var(--border-color)' : '1px solid transparent',
+                        fontWeight: studentView === key ? 700 : 600,
+                      }}
+                      onClick={() => setStudentView(key)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="btn-primary student-scan-desktop"
+                    style={{ flex: 1 }}
+                    onClick={() => navigate('/scan')}
+                  >
+                    <ScanFace size={14} /> Scan
+                  </button>
+                </div>
+
+                <div key={studentView} className="student-view-panel animate-section-in">
+                  {studentView === 'stats' ? (
+                    <div className="student-stats-layout">
+                      <div className="student-mini-stat-grid">
+                        <StatCard label="Total Classes" value={studentStats.overall.total_classes} icon={<FileSpreadsheet size={20} />} />
+                        <StatCard label="Attended" value={studentStats.overall.total_attended} icon={<ShieldCheck size={20} />} color="var(--success)" />
+                        <StatCard label="Missed" value={studentStats.overall.total_missed} icon={<X size={20} />} color="var(--error)" />
+                        <StatCard label="Overall Rate" value={`${studentAttendanceRate}%`} icon={<Activity size={20} />} color="var(--accent-primary)" />
+                      </div>
+
+                      <div className="notion-block has-border student-recent-card">
+                        <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Sparkles size={14} /> Recent Attendance
+                        </h3>
+                        {recentStudentAttendance.length > 0 ? (
+                          <div className="student-recent-list">
+                            {recentStudentAttendance.map((entry) => (
+                              <div key={`${entry.session_id}-${entry.date}`} className="student-recent-row">
+                                <div>
+                                  <p style={{ fontSize: 13, fontWeight: 700 }}>{entry.session_name}</p>
+                                  <p className="text-secondary" style={{ fontSize: 11 }}>
+                                    {new Date(entry.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+                                  </p>
+                                </div>
+                                <span className={getStudentStatusPillClass(entry.status)}>{entry.status}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-secondary" style={{ fontSize: 13 }}>No attendance activity yet.</p>
+                        )}
                       </div>
                     </div>
-                  ))}
-                  {studentStats.by_course.length === 0 && (
-                    <p className="text-secondary">You are not enrolled in any sessions yet.</p>
+                  ) : (
+                    <div className="student-sessions-layout">
+                      <div id="join-session-card" className="notion-block has-border student-join-card">
+                        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 2 }}>Join Class Session</h3>
+                        <p className="text-secondary" style={{ fontSize: 13, marginBottom: 10 }}>Use your teacher's 6-character enrollment code.</p>
+
+                        <div className="student-code-preview">
+                          {Array.from({ length: 6 }).map((_, index) => (
+                            <div key={index} className={`student-code-cell ${joinCode[index] ? 'filled' : ''}`}>
+                              {joinCode[index] || ''}
+                            </div>
+                          ))}
+                        </div>
+
+                        <form onSubmit={handleJoinSession} className="student-join-form">
+                          <input
+                            className="input-base student-join-input"
+                            placeholder="A1B2C3"
+                            value={joinCode}
+                            onChange={e => setJoinCode(e.target.value.toUpperCase().replace(/\s+/g, '').slice(0, 6))}
+                            maxLength={6}
+                            required
+                          />
+                          <div className="student-join-actions">
+                            <button type="submit" className="btn-primary" disabled={joining}>{joining ? 'Joining…' : 'Join'}</button>
+                            <button type="button" className="btn-ghost" onClick={() => setJoinCode('')} disabled={joining}>Clear</button>
+                          </div>
+                        </form>
+
+                        {joinMsg && (
+                          <div className={`student-join-message ${joinMsg.toLowerCase().includes('success') ? 'ok' : 'bad'}`}>
+                            {joinMsg}
+                          </div>
+                        )}
+                      </div>
+
+                      <h2 className="student-section-heading">
+                        <BookOpen size={16} /> My Courses
+                      </h2>
+                      <div className="student-course-grid">
+                        {studentStats.by_course.map((c, i) => (
+                          <div key={i} className="student-course-card notion-block">
+                            <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 12px' }}>{c.course_name}</h3>
+                            <div className="student-course-meta">
+                              <div className="student-course-meta-item">
+                                <span className="text-secondary">Total</span>
+                                <strong>{c.total_classes}</strong>
+                              </div>
+                              <div className="student-course-meta-item">
+                                <span className="text-secondary">Attended</span>
+                                <strong style={{ color: 'var(--success)' }}>{c.attended}</strong>
+                              </div>
+                              <div className="student-course-meta-item">
+                                <span className="text-secondary">Missed</span>
+                                <strong style={{ color: 'var(--error)' }}>{c.missed}</strong>
+                              </div>
+                            </div>
+                            <div className="student-course-progress">
+                              <div
+                                style={{
+                                  width: `${c.total_classes ? Math.round((c.attended / c.total_classes) * 100) : 0}%`,
+                                  height: '100%',
+                                  background: c.total_classes && (c.attended / c.total_classes) >= 0.75 ? 'var(--success)' : 'var(--accent-primary)',
+                                  transition: 'width 260ms ease',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        {studentStats.by_course.length === 0 && (
+                          <p className="text-secondary">You are not enrolled in any sessions yet.</p>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
             ) : (
-              <p className="text-secondary">Loading stats...</p>
+              <div className="student-loading-card notion-block has-border">
+                <p className="text-secondary">Loading stats...</p>
+              </div>
+            )}
+
+            {studentStats && (
+              <div className="student-bottom-nav">
+                <button type="button" className={`student-bottom-btn ${studentView === 'sessions' ? 'active' : ''}`} onClick={() => setStudentView('sessions')}>
+                  <CalendarDays size={15} />
+                  <span>Sessions</span>
+                </button>
+                <button type="button" className="student-scan-fab" onClick={() => navigate('/scan')} aria-label="Open scanner">
+                  <ScanFace size={22} />
+                </button>
+                <button type="button" className={`student-bottom-btn ${studentView === 'stats' ? 'active' : ''}`} onClick={() => setStudentView('stats')}>
+                  <BarChart3 size={15} />
+                  <span>Stats</span>
+                </button>
+              </div>
             )}
           </div>
         ) : (
           /* ═══ TEACHER VIEW ═══ */
           <>
             {/* Tabs */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 32, paddingBottom: 12, borderBottom: '1px solid var(--border-color)' }}>
+            <div className="teacher-tab-row">
           {([
             ['sessions', 'Sessions', <ScanFace size={16} />],
             ['register', 'Attendance', <FileSpreadsheet size={16} />],
             ['students', 'Students', <Users size={16} />],
             ['ledger', 'Audit Ledger', <Shield size={16} />],
           ] as const).map(([key, label, icon]) => (
-            <button key={key} className="btn-ghost" style={{
-              background: activeTab === key ? 'var(--bg-secondary)' : 'transparent',
-              color: activeTab === key ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontWeight: activeTab === key ? 500 : 400,
-              padding: '6px 14px',
-              borderRadius: 'var(--radius-sm)',
-            }} onClick={() => setActiveTab(key as any)}>
+            <button key={key} className={`teacher-tab-btn ${activeTab === key ? 'active' : ''}`} onClick={() => setActiveTab(key as any)}>
               {icon} {label}
             </button>
           ))}
@@ -1015,7 +1159,7 @@ export default function Dashboard() {
 // ── Helpers ──
 function StatCard({ label, value, icon, color }: { label: string; value: number | string; icon: React.ReactNode; color?: string }) {
   return (
-    <div className="notion-block" style={{ padding: '24px 16px', textAlign: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
+    <div className="notion-block student-stat-card" style={{ padding: '24px 16px', textAlign: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
       <div style={{ color: color || 'var(--text-secondary)', margin: '0 auto 12px' }}>{icon}</div>
       <p style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, color: color || 'var(--text-primary)' }}>{value}</p>
       <p className="text-secondary" style={{ fontSize: 13, marginTop: 8, fontWeight: 500 }}>{label}</p>
@@ -1050,6 +1194,12 @@ function getMatrixStatusTone(status: string | null) {
     background: 'rgba(55, 53, 47, 0.06)',
     text: 'var(--text-secondary)',
   };
+}
+
+function getStudentStatusPillClass(status: string) {
+  if (status === 'Present') return 'status-pill success';
+  if (status === 'Leave') return 'status-pill warning';
+  return 'status-pill error';
 }
 
 const thStyle: React.CSSProperties = { padding: '10px 12px', fontWeight: 600, fontSize: 12, textAlign: 'center', whiteSpace: 'nowrap' };

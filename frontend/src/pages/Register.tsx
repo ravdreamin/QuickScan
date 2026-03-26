@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ScanFace, User, AlertCircle, UserPlus } from 'lucide-react';
-import { api, getHardwareId, saveAuth, isLoggedIn, getUser } from '../lib/api';
+import { api, getHardwareId, saveAuth, isLoggedIn } from '../lib/api';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -15,8 +15,7 @@ export default function Register() {
 
   useEffect(() => {
     if (isLoggedIn()) {
-      const u = getUser();
-      navigate(u?.role === 'student' ? '/scan' : '/dashboard');
+      navigate('/dashboard');
     }
   }, [navigate]);
 
@@ -32,7 +31,7 @@ export default function Register() {
         headers: { Authorization: `Bearer ${data.access_token}` },
       });
       saveAuth(data.access_token, me.data);
-      navigate(me.data.role === 'student' ? '/scan' : '/dashboard');
+      navigate('/dashboard');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Registration failed.');
     } finally {
