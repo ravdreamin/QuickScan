@@ -8,7 +8,7 @@ from app.api import auth, qr, attendance, sessions, audit
 from app.core.config import settings
 
 app = FastAPI(
-    title="QuickScan 2.0 API",
+    title="QuickScan API",
     description="Secure QR-Based Attendance Platform",
     version="2.0.0"
 )
