@@ -4,18 +4,15 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.ASYNC_DATABASE_URL,
     future=True,
-    echo=True,
     pool_pre_ping=True,
-    pool_size=20,
-    max_overflow=10,
 )
 
-# 1. Use async_sessionmaker to bind the engine properly
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
 
 async def get_db():
     async with AsyncSessionLocal() as session:

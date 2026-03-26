@@ -1,4 +1,3 @@
-import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import computed_field
 
@@ -15,7 +14,6 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
 
     PASETO_SECRET_KEY: str = ""
-
 
     # Frontend origin for CORS (comma-separated for multiple)
     FRONTEND_URL: str = "*"

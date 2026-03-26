@@ -5,14 +5,13 @@ Authentication routes:
   - GET  /auth/me             (return current user profile from token)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.core.security import verify_password, create_paseto_token, get_password_hash
-from app.core.config import settings
 from app.schemas.auth import LoginRequest, TokenResponse, RegisterRequest
 from app.api.deps import get_current_user
 

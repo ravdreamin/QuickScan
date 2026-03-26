@@ -79,7 +79,7 @@ async def list_my_sessions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role in [UserRole.TEACHER, UserRole.DEPT_ADMIN, UserRole.SUPER_ADMIN]:
+    if current_user.role == UserRole.TEACHER:
         query = select(Session).where(Session.instructor_id == current_user.id).order_by(Session.start_time.desc())
     else:
         query = (
