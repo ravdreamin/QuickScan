@@ -4,25 +4,114 @@ import { QRCodeSVG } from 'qrcode.react';
 import { api, getUser, logout, isLoggedIn } from '../lib/api';
 import {
   ScanFace, LogOut, Play, RefreshCw, Plus, UserPlus, ShieldCheck,
-  Clock, MapPin, Users, AlertCircle, X, Download, BarChart3,
+  Clock, MapPin, Users, AlertCircle, X,
   FileSpreadsheet, Shield, Activity
 } from 'lucide-react';
 
 interface SessionItem {
   id: string; name: string; start_time: string; end_time: string;
   latitude: number | null; longitude: number | null; radius_meters: number;
+  enrollment_code: string;
 }
 
-interface AttendanceRow {
-  student_id: string; full_name: string; email: string;
+interface SessionStudentRow {
+  student_id: string; roll_no: string; full_name: string; email: string;
   device_id: string; status: string; scan_time: string | null;
   scan_lat: number | null; scan_lon: number | null;
 }
 
-interface Analytics {
-  session_name: string; total_enrolled: number; total_present: number;
-  total_absent: number; total_out_of_bounds: number; attendance_rate: number;
-  geofence: { lat: number; lon: number; radius_m: number } | null;
+interface SessionStudentsData {
+  session_id: string;
+  session_name: string;
+  total_enrolled: number;
+  total_present: number;
+  total_absent: number;
+  register: SessionStudentRow[];
+}
+
+interface AttendanceMatrixColumn {
+  session_id: string;
+  date: string;
+}
+
+interface AttendanceMatrixCell {
+  session_id: string;
+  status: string | null;
+}
+
+interface AttendanceMatrixRow {
+  student_id: string;
+  roll_no: string;
+  full_name: string;
+  email: string;
+  device_id: string;
+  total_classes: number;
+  total_attended: number;
+  total_missed: number;
+  attendance_rate: number;
+  records: AttendanceMatrixCell[];
+}
+
+interface SessionAttendanceMatrixData {
+  session_id: string;
+  session_name: string;
+  columns: AttendanceMatrixColumn[];
+  rows: AttendanceMatrixRow[];
+  summary: {
+    total_students: number;
+    total_dates: number;
+  };
+}
+
+interface StudentProfile {
+  student_id: string;
+  full_name: string;
+  email: string;
+  roll_no: string;
+  device_id: string;
+}
+
+interface StudentAttendanceEntry {
+  session_id: string;
+  session_name: string;
+  date: string;
+  status: string;
+  scan_time: string | null;
+  roll_no: string;
+  email: string;
+  device_id: string;
+}
+
+interface StudentCourseStat {
+  course_name: string;
+  total_classes: number;
+  attended: number;
+  missed: number;
+}
+
+interface StudentDashboardStats {
+  profile: StudentProfile;
+  overall: {
+    total_classes: number;
+    total_attended: number;
+    total_missed: number;
+  };
+  by_course: StudentCourseStat[];
+  attendance_register: StudentAttendanceEntry[];
+}
+
+interface StudentEditForm {
+  roll_no: string;
+  email: string;
+  device_id: string;
+}
+
+interface EditableStudent {
+  student_id: string;
+  roll_no: string;
+  full_name: string;
+  email: string;
+  device_id: string;
 }
 
 interface LedgerEntry {
@@ -33,8 +122,9 @@ interface LedgerEntry {
 export default function Dashboard() {
   const navigate = useNavigate();
   const user = getUser();
+  const isStudent = user?.role === 'student';
   const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [activeTab, setActiveTab] = useState<'sessions' | 'register' | 'analytics' | 'ledger'>('sessions');
+  const [activeTab, setActiveTab] = useState<'sessions' | 'register' | 'students' | 'ledger'>('sessions');
   const [error, setError] = useState('');
 
   // QR state
@@ -51,17 +141,29 @@ export default function Dashboard() {
 
   // Enroll modal
   const [enrollSessionId, setEnrollSessionId] = useState<string | null>(null);
-  const [enrollEmail, setEnrollEmail] = useState('');
+  const [enrollEmails, setEnrollEmails] = useState('');
   const [enrolling, setEnrolling] = useState(false);
   const [enrollMsg, setEnrollMsg] = useState('');
 
   // Attendance register
-  const [registerData, setRegisterData] = useState<{ session_name: string; total_enrolled: number; total_present: number; total_absent: number; register: AttendanceRow[] } | null>(null);
+  const [registerData, setRegisterData] = useState<SessionAttendanceMatrixData | null>(null);
   const [registerSessionId, setRegisterSessionId] = useState('');
+  const [studentsData, setStudentsData] = useState<SessionStudentsData | null>(null);
+  const [studentsSessionId, setStudentsSessionId] = useState('');
 
-  // Analytics
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
-  const [analyticsSessionId, setAnalyticsSessionId] = useState('');
+  const [studentStats, setStudentStats] = useState<StudentDashboardStats | null>(null);
+
+  // Student join code
+  const [joinCode, setJoinCode] = useState('');
+  const [joining, setJoining] = useState(false);
+  const [joinMsg, setJoinMsg] = useState('');
+
+  // Students Overview
+  const [highlightStudentId, setHighlightStudentId] = useState<string | null>(null);
+  const [studentMessage, setStudentMessage] = useState('');
+  const [editingStudent, setEditingStudent] = useState<EditableStudent | null>(null);
+  const [editForm, setEditForm] = useState<StudentEditForm>({ roll_no: '', email: '', device_id: '' });
+  const [savingStudent, setSavingStudent] = useState(false);
 
   // Audit Ledger
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
@@ -69,8 +171,19 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!isLoggedIn()) { navigate('/login'); return; }
-    fetchSessions();
-  }, [navigate]);
+    if (isStudent) {
+      fetchStudentStats();
+    } else {
+      fetchSessions();
+    }
+  }, [isStudent, navigate]);
+
+  const fetchStudentStats = async () => {
+    try {
+      const { data } = await api.get('/sessions/student/stats');
+      setStudentStats(data);
+    } catch (err: any) { setError(err.response?.data?.detail || 'Failed to load stats.'); }
+  };
 
   const fetchSessions = async () => {
     try {
@@ -79,12 +192,54 @@ export default function Dashboard() {
     } catch (err: any) { setError(err.response?.data?.detail || 'Failed to load sessions.'); }
   };
 
-  const generateQR = async (sessionId: string) => {
+  const generateQR = async (sessionId: string, manual: boolean = false) => {
     setError(''); setActiveSessionId(sessionId);
     try {
-      const { data } = await api.get(`/sessions/${sessionId}/qr`);
+      const { data } = await api.get(`/sessions/${sessionId}/qr${manual ? '?manual=true' : ''}`);
       setQrPayload(data);
-    } catch (err: any) { setError(err.response?.data?.detail || 'Failed to generate QR.'); }
+    } catch (err: any) { 
+      setError(err.response?.data?.detail || 'Failed to generate QR.'); 
+      setQrPayload(null);
+    }
+  };
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (activeSessionId && activeTab === 'sessions' && qrPayload) {
+      interval = setInterval(() => {
+        api.get(`/sessions/${activeSessionId}/qr`)
+           .then(({ data }) => setQrPayload(data))
+           .catch((err: any) => { 
+             setError(err.response?.data?.detail || 'Failed to generate QR.'); 
+             setQrPayload(null);
+             clearInterval(interval);
+           });
+      }, 15000);
+    }
+    return () => clearInterval(interval);
+  }, [activeSessionId, activeTab, qrPayload]);
+
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  useEffect(() => {
+    let timerId: ReturnType<typeof setInterval>;
+    if (qrPayload?.window_closes_at) {
+      const updateTimer = () => {
+        const now = Math.floor(Date.now() / 1000);
+        const remaining = qrPayload.window_closes_at - now;
+        setTimeLeft(remaining > 0 ? remaining : 0);
+      };
+      updateTimer();
+      timerId = setInterval(updateTimer, 1000);
+    } else {
+      setTimeLeft(null);
+    }
+    return () => clearInterval(timerId);
+  }, [qrPayload?.window_closes_at]);
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   const handleCreateSession = async (e: React.FormEvent) => {
@@ -107,10 +262,24 @@ export default function Dashboard() {
   const handleEnroll = async (e: React.FormEvent) => {
     e.preventDefault(); setEnrolling(true); setEnrollMsg('');
     try {
-      const { data } = await api.post(`/sessions/${enrollSessionId}/enroll`, { student_email: enrollEmail });
-      setEnrollMsg(data.message); setEnrollEmail('');
-    } catch (err: any) { setEnrollMsg(err.response?.data?.detail || 'Enrollment failed.'); }
+      const emailList = enrollEmails.split(/[,;\n]+/).map(e => e.trim()).filter(e => e);
+      if (emailList.length === 0) throw new Error("Please enter at least one valid email.");
+      const { data } = await api.post(`/sessions/${enrollSessionId}/enroll/bulk`, { student_emails: emailList });
+      setEnrollMsg(data.message); setEnrollEmails('');
+    } catch (err: any) { setEnrollMsg(err.response?.data?.detail || err.message || 'Enrollment failed.'); }
     finally { setEnrolling(false); }
+  };
+
+  const handleJoinSession = async (e: React.FormEvent) => {
+    e.preventDefault(); setJoining(true); setJoinMsg(''); setError('');
+    if (!joinCode.trim()) { setJoining(false); return; }
+    try {
+      const { data } = await api.post('/sessions/join', { code: joinCode.trim() });
+      setJoinMsg(data.message); setJoinCode('');
+      // Reload stats after successful join
+      fetchStudentStats();
+    } catch (err: any) { setJoinMsg(err.response?.data?.detail || 'Failed to join session.'); }
+    finally { setJoining(false); }
   };
 
   const fillGeo = () => {
@@ -125,33 +294,90 @@ export default function Dashboard() {
   const loadAttendanceRegister = async (sessionId: string) => {
     setRegisterSessionId(sessionId); setRegisterData(null); setError('');
     try {
-      const { data } = await api.get(`/sessions/${sessionId}/attendance`);
+      const { data } = await api.get(`/sessions/${sessionId}/attendance/matrix`);
       setRegisterData(data);
     } catch (err: any) { setError(err.response?.data?.detail || 'Failed to load attendance.'); }
   };
 
-  const downloadExcel = async (sessionId: string) => {
+  // STUDENTS
+  const loadStudentsForSession = async (sessionId: string) => {
+    setStudentsSessionId(sessionId);
+    setStudentsData(null);
+    setError('');
     try {
-      const response = await api.get(`/sessions/${sessionId}/attendance/export`, { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const a = document.createElement('a'); a.href = url;
-      const disposition = response.headers['content-disposition'];
-      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'attendance.xlsx';
-      a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err: any) { setError(err.response?.data?.detail || 'Export failed.'); }
+      const { data } = await api.get(`/sessions/${sessionId}/attendance`);
+      setStudentsData(data);
+    } catch (err: any) { setError(err.response?.data?.detail || 'Failed to load students.'); }
   };
 
-  // ANALYTICS
-  const loadAnalytics = async (sessionId: string) => {
-    setAnalyticsSessionId(sessionId); setAnalytics(null); setError('');
-    try {
-      const { data } = await api.get(`/sessions/${sessionId}/analytics`);
-      setAnalytics(data);
-    } catch (err: any) { setError(err.response?.data?.detail || 'Failed to load analytics.'); }
+  const openStudentEditor = (student: EditableStudent) => {
+    setStudentMessage('');
+    setError('');
+    setEditingStudent(student);
+    setEditForm({
+      roll_no: student.roll_no === 'N/A' ? '' : student.roll_no,
+      email: student.email,
+      device_id: student.device_id === 'NOT BOUND' ? '' : student.device_id,
+    });
   };
 
-  // AUDIT LEDGER
+  const closeStudentEditor = () => {
+    setEditingStudent(null);
+    setEditForm({ roll_no: '', email: '', device_id: '' });
+    setSavingStudent(false);
+  };
+
+  const handleStudentUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStudent) return;
+
+    setSavingStudent(true);
+    setStudentMessage('');
+    setError('');
+
+    try {
+      await api.put(`/sessions/students/${editingStudent.student_id}`, {
+        roll_no: editForm.roll_no,
+        email: editForm.email,
+        device_id: editForm.device_id,
+      });
+      if (studentsSessionId) {
+        await loadStudentsForSession(studentsSessionId);
+      }
+      if (registerSessionId) {
+        await loadAttendanceRegister(registerSessionId);
+      }
+      setStudentMessage(`Updated ${editingStudent.full_name}.`);
+      closeStudentEditor();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to update student.');
+      setSavingStudent(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'register') {
+      const defaultSessionId = registerSessionId || studentsSessionId || activeSessionId || sessions[0]?.id;
+      if (defaultSessionId && defaultSessionId !== registerSessionId) {
+        loadAttendanceRegister(defaultSessionId);
+      }
+    }
+    if (activeTab === 'students') {
+      const defaultSessionId = studentsSessionId || registerSessionId || activeSessionId || sessions[0]?.id;
+      if (defaultSessionId && defaultSessionId !== studentsSessionId) {
+        loadStudentsForSession(defaultSessionId);
+      }
+    }
+    if (activeTab === 'ledger') loadLedger();
+  }, [activeTab, activeSessionId, registerSessionId, sessions, studentsSessionId]);
+
+  useEffect(() => {
+    if (activeTab === 'students' && highlightStudentId) {
+      const studentCard = document.getElementById(`student-${highlightStudentId}`);
+      studentCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [activeTab, studentsData, highlightStudentId]);
+
   const loadLedger = async () => {
     setError('');
     try {
@@ -160,12 +386,20 @@ export default function Dashboard() {
     } catch (err: any) { setError(err.response?.data?.detail || 'Failed to load ledger.'); }
   };
 
-  useEffect(() => {
-    if (activeTab === 'ledger') loadLedger();
-  }, [activeTab]);
+  const selectedRegisterSession = sessions.find((session) => session.id === registerSessionId) ?? null;
+  const selectedStudentsSession = sessions.find((session) => session.id === studentsSessionId) ?? null;
+
+  const jumpToStudentDetails = (studentId: string) => {
+    setHighlightStudentId(studentId);
+    if (registerSessionId) {
+      setStudentsSessionId(registerSessionId);
+      loadStudentsForSession(registerSessionId);
+    }
+    setActiveTab('students');
+  };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-color)' }}>
       {/* Nav */}
       <nav className="navbar">
         <div className="container navbar-content" style={{ maxWidth: 1200 }}>
@@ -181,86 +415,146 @@ export default function Dashboard() {
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <h1 style={{ fontSize: '1.75rem' }}>Dashboard</h1>
-          <button className="btn-primary" onClick={() => setShowCreate(true)}><Plus size={16} /> New Session</button>
+          {isStudent ? (
+            <Link to="/scan" className="btn-primary" style={{ textDecoration: 'none' }}><ScanFace size={16} /> Scan QR</Link>
+          ) : (
+            <button className="btn-primary" onClick={() => setShowCreate(true)}><Plus size={16} /> New Session</button>
+          )}
         </div>
 
-        {/* Tabs */}
-        <div style={{ display: 'flex', gap: 4, marginBottom: 24, padding: 4, background: 'var(--bg-color)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+        {error && <div className="alert alert-error animate-fade-in" style={{ marginBottom: 16 }}><AlertCircle size={16} />{error}</div>}
+
+        {/* ═══ STUDENT VIEW ═══ */}
+        {isStudent ? (
+          <div>
+            {studentStats ? (
+              <div className="animate-fade-in">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 32 }}>
+                  <StatCard label="Total Classes" value={studentStats.overall.total_classes} icon={<FileSpreadsheet size={20} />} />
+                  <StatCard label="Attended" value={studentStats.overall.total_attended} icon={<ShieldCheck size={20} />} color="var(--success)" />
+                  <StatCard label="Missed" value={studentStats.overall.total_missed} icon={<X size={20} />} color="var(--error)" />
+                  <StatCard label="Overall Rate" value={`${studentStats.overall.total_classes ? Math.round((studentStats.overall.total_attended / studentStats.overall.total_classes) * 100) : 0}%`} icon={<Activity size={20} />} color="var(--accent-primary)" />
+                </div>
+                
+                <div className="notion-block has-border" style={{ marginBottom: 32, padding: 24, background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+                  <div>
+                    <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Join a New Session</h3>
+                    <p className="text-secondary" style={{ fontSize: 13 }}>Ask your teacher for the 6-character enrollment code.</p>
+                  </div>
+                  <form onSubmit={handleJoinSession} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input className="input-base" style={{ width: 140, textTransform: 'uppercase' }} placeholder="e.g. A1B2C3" value={joinCode} onChange={e => setJoinCode(e.target.value)} maxLength={6} required />
+                    <button type="submit" className="btn-primary" disabled={joining}>{joining ? 'Joining…' : 'Join'}</button>
+                  </form>
+                  {joinMsg && <div style={{ flexBasis: '100%', fontSize: 13, color: joinMsg.includes('Success') ? 'var(--success)' : 'var(--error)' }}>{joinMsg}</div>}
+                </div>
+
+                <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>My Courses</h2>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
+                  {studentStats.by_course.map((c, i) => (
+                    <div key={i} className="notion-block" style={{ padding: 20, border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
+                      <h3 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 16px' }}>{c.course_name}</h3>
+                      <div style={{ display: 'flex', gap: 12, fontSize: 13, background: 'var(--bg-secondary)', padding: 12, borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ flex: 1 }}>
+                          <span className="text-secondary" style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>Total</span>
+                          <span style={{ fontWeight: 600 }}>{c.total_classes}</span>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <span className="text-secondary" style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>Attended</span>
+                          <span style={{ fontWeight: 600, color: 'var(--success)' }}>{c.attended}</span>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <span className="text-secondary" style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>Missed</span>
+                          <span style={{ fontWeight: 600, color: 'var(--error)' }}>{c.missed}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {studentStats.by_course.length === 0 && (
+                    <p className="text-secondary">You are not enrolled in any sessions yet.</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-secondary">Loading stats...</p>
+            )}
+          </div>
+        ) : (
+          /* ═══ TEACHER VIEW ═══ */
+          <>
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 32, paddingBottom: 12, borderBottom: '1px solid var(--border-color)' }}>
           {([
-            ['sessions', 'Sessions', <ScanFace size={15} />],
-            ['register', 'Attendance', <FileSpreadsheet size={15} />],
-            ['analytics', 'Analytics', <BarChart3 size={15} />],
-            ['ledger', 'Audit Ledger', <Shield size={15} />],
+            ['sessions', 'Sessions', <ScanFace size={16} />],
+            ['register', 'Attendance', <FileSpreadsheet size={16} />],
+            ['students', 'Students', <Users size={16} />],
+            ['ledger', 'Audit Ledger', <Shield size={16} />],
           ] as const).map(([key, label, icon]) => (
             <button key={key} className="btn-ghost" style={{
-              flex: 1, justifyContent: 'center',
               background: activeTab === key ? 'var(--bg-secondary)' : 'transparent',
-              fontWeight: activeTab === key ? 600 : 400,
-              boxShadow: activeTab === key ? 'var(--shadow-sm)' : 'none',
+              color: activeTab === key ? 'var(--text-primary)' : 'var(--text-secondary)',
+              fontWeight: activeTab === key ? 500 : 400,
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-sm)',
             }} onClick={() => setActiveTab(key as any)}>
               {icon} {label}
             </button>
           ))}
         </div>
 
-        {error && <div className="alert alert-error animate-fade-in" style={{ marginBottom: 16 }}><AlertCircle size={16} />{error}</div>}
-
         {/* ═══ SESSIONS TAB ═══ */}
         {activeTab === 'sessions' && (
           <div className="dashboard-grid">
             <div>
-              <h2 style={{ fontSize: 15, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}><Clock size={16} /> My Sessions ({sessions.length})</h2>
+              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}><Clock size={16} color="var(--text-secondary)" /> My Sessions ({sessions.length})</h2>
               {sessions.length === 0 && (
-                <div className="notion-block has-border" style={{ padding: 32, textAlign: 'center' }}>
-                  <p className="text-secondary">No sessions yet. Click "New Session" to get started.</p>
+                <div style={{ padding: '32px 16px', textAlign: 'center', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                  <p className="text-secondary" style={{ fontSize: 14 }}>No sessions yet. Click "New Session" to get started.</p>
                 </div>
               )}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {sessions.map(s => (
-                  <div key={s.id} className="notion-block has-border" style={{ padding: 16, background: activeSessionId === s.id ? 'var(--bg-color)' : 'var(--bg-color)' }}>
-                    <h3 style={{ fontSize: 14, margin: '0 0 4px' }}>{s.name}</h3>
-                    <p style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-placeholder)', margin: '0 0 10px' }}>{s.id}</p>
-                    <div style={{ display: 'flex', gap: 6, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <Clock size={12} /> {new Date(s.start_time).toLocaleString()}
-                      {s.latitude && <><MapPin size={12} /> {s.latitude.toFixed(2)}, {s.longitude?.toFixed(2)}</>}
+                  <div key={s.id} onClick={() => setActiveSessionId(s.id)} style={{
+                    padding: 16, 
+                    background: activeSessionId === s.id ? 'var(--bg-secondary)' : 'transparent',
+                    border: '1px solid',
+                    borderColor: activeSessionId === s.id ? 'var(--border-color)' : 'transparent',
+                    borderRadius: 'var(--radius-md)',
+                    cursor: 'pointer',
+                    transition: 'background 0.1s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (activeSessionId !== s.id) e.currentTarget.style.background = 'var(--bg-hover)';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (activeSessionId !== s.id) e.currentTarget.style.background = 'transparent';
+                  }}>
+                    <h3 style={{ fontSize: 15, fontWeight: 500, margin: '0 0 6px' }}>{s.name}</h3>
+                    <p style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-placeholder)', margin: '0 0 12px' }}>{s.id}</p>
+                    <div style={{ display: 'flex', gap: 12, fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={14} /> {new Date(s.start_time).toLocaleString()}</span>
+                      {s.latitude && <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><MapPin size={14} /> {s.latitude.toFixed(2)}, {s.longitude?.toFixed(2)}</span>}
+                      {s.enrollment_code && <span style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--accent-primary)', color: '#fff', padding: '2px 8px', borderRadius: 4, fontWeight: 600, fontFamily: 'monospace', letterSpacing: '0.05em' }}>Code: {s.enrollment_code}</span>}
                     </div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <button className="btn-primary" style={{ padding: '5px 10px', fontSize: 12 }} onClick={() => generateQR(s.id)}><Play size={13} /> Project</button>
-                      <button className="btn-secondary" style={{ padding: '5px 10px', fontSize: 12 }} onClick={() => { setEnrollSessionId(s.id); setEnrollMsg(''); }}><UserPlus size={13} /> Enroll</button>
-                      <button className="btn-ghost" style={{ padding: '5px 10px', fontSize: 12 }} onClick={() => { setActiveTab('register'); loadAttendanceRegister(s.id); }}><FileSpreadsheet size={13} /> Register</button>
-                    </div>
+                    {activeSessionId === s.id && (
+                      <div className="animate-fade-in" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, paddingTop: 16, borderTop: '1px solid var(--border-color)' }}>
+                        <button className="btn-primary" style={{ padding: '6px 12px', fontSize: 13 }} onClick={(e) => { e.stopPropagation(); generateQR(s.id, true); }}><Play size={14} /> Project</button>
+                        <button className="btn-secondary" style={{ padding: '6px 12px', fontSize: 13 }} onClick={(e) => { e.stopPropagation(); setEnrollSessionId(s.id); setEnrollMsg(''); }}><UserPlus size={14} /> Enroll</button>
+                        <button className="btn-ghost" style={{ padding: '6px 12px', fontSize: 13 }} onClick={(e) => { e.stopPropagation(); setActiveTab('register'); loadAttendanceRegister(s.id); }}><FileSpreadsheet size={14} /> Register</button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
-            {/* QR Projection */}
+            {/* QR Projection (Placeholder when not projecting) */}
             <div>
-              <h2 style={{ fontSize: 15, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}><ScanFace size={16} /> Live Projection</h2>
-              <div className="notion-block has-border flex-center" style={{ minHeight: 380, flexDirection: 'column', background: 'var(--bg-color)' }}>
-                {!qrPayload ? (
+              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}><ScanFace size={16} color="var(--text-secondary)" /> Live Projection</h2>
+              <div className="notion-block" style={{ minHeight: 440, display: 'flex', flexDirection: 'column', justifyContent: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
                   <div style={{ textAlign: 'center', color: 'var(--text-placeholder)', padding: 40 }}>
                     <ScanFace size={48} strokeWidth={1} style={{ margin: '0 auto 16px' }} />
-                    <p>Select a session → "Project"</p>
+                    <p style={{ fontSize: 14 }}>Select a session & click "Project"</p>
+                    <p style={{ fontSize: 12, marginTop: 8 }}>This will open a full-screen projection for your class.</p>
                   </div>
-                ) : (
-                  <div className="animate-fade-in" style={{ textAlign: 'center', padding: 24 }}>
-                    <div style={{ background: '#fff', padding: 20, borderRadius: 16, boxShadow: 'var(--shadow-sm)', display: 'inline-block' }}>
-                      <QRCodeSVG value={JSON.stringify(qrPayload)} size={220} level="H" bgColor="#fff" fgColor="#37352f" />
-                    </div>
-                    <div style={{ marginTop: 16 }}>
-                      <p style={{ letterSpacing: '0.06em', fontSize: 13, fontWeight: 600 }}>SCAN TO ATTEND</p>
-                      <p className="text-secondary" style={{ fontSize: 12 }}>Token: {qrPayload.timestamp}</p>
-                      {qrPayload.class_lat && (
-                        <div className="status-pill success" style={{ marginTop: 8, fontSize: 11 }}>
-                          <ShieldCheck size={12} /> Geofence ON
-                        </div>
-                      )}
-                    </div>
-                    <button className="btn-secondary" style={{ marginTop: 16, fontSize: 12 }} onClick={() => generateQR(activeSessionId!)}>
-                      <RefreshCw size={13} /> Regenerate
-                    </button>
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -278,70 +572,103 @@ export default function Dashboard() {
                   {sessions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
-              {registerSessionId && (
-                <button className="btn-primary" style={{ padding: '8px 16px', fontSize: 13, marginBottom: 0 }} onClick={() => downloadExcel(registerSessionId)}>
-                  <Download size={14} /> Export Excel
-                </button>
-              )}
+            </div>
+
+            <div className="notion-block has-border" style={{ marginBottom: 20, padding: 20, background: 'var(--bg-color)' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 6px' }}>Date-wise Attendance Register</h3>
+              <p className="text-secondary" style={{ fontSize: 13 }}>
+                Roll number + date columns only. Click a roll number to jump to that student in the Students tab.
+              </p>
             </div>
 
             {/* Register table */}
             {registerData ? (
               <div className="animate-fade-in">
-                {/* Stats bar */}
                 <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                   {[
-                    { label: 'Enrolled', value: registerData.total_enrolled, color: 'var(--text-primary)' },
-                    { label: 'Present', value: registerData.total_present, color: 'var(--success)' },
-                    { label: 'Absent', value: registerData.total_absent, color: 'var(--error)' },
+                    { label: 'Students', value: registerData.summary.total_students, color: 'var(--text-primary)' },
+                    { label: 'Dates', value: registerData.summary.total_dates, color: 'var(--text-primary)' },
+                    { label: 'Class', value: selectedRegisterSession?.name || registerData.session_name, color: 'var(--accent-primary)' },
                   ].map((s, i) => (
-                    <div key={i} className="notion-block has-border" style={{ flex: 1, minWidth: 120, padding: '16px 20px', textAlign: 'center', background: 'var(--bg-color)' }}>
-                      <p style={{ fontSize: 28, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</p>
-                      <p className="text-secondary" style={{ fontSize: 12, marginTop: 4 }}>{s.label}</p>
+                    <div key={i} className="notion-block" style={{ flex: 1, minWidth: 140, padding: '22px 18px', textAlign: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
+                      <p style={{ fontSize: 32, fontWeight: 700, color: s.color, lineHeight: 1, margin: 0 }}>{s.value}</p>
+                      <p className="text-secondary" style={{ fontSize: 13, marginTop: 8, fontWeight: 500 }}>{s.label}</p>
                     </div>
                   ))}
                 </div>
 
-                {/* Table */}
                 <div className="notion-block has-border" style={{ overflow: 'auto', background: 'var(--bg-color)' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <table style={{ width: '100%', minWidth: Math.max(920, 420 + registerData.columns.length * 120), borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
-                        <th style={thStyle}>#</th>
-                        <th style={{ ...thStyle, textAlign: 'left' }}>Student</th>
-                        <th style={{ ...thStyle, textAlign: 'left' }}>Email</th>
-                        <th style={thStyle}>Device ID</th>
-                        <th style={thStyle}>Status</th>
-                        <th style={thStyle}>Scan Time</th>
-                        <th style={thStyle}>Location</th>
+                        <th style={{ ...thStyle, width: 110, minWidth: 110, position: 'sticky', left: 0, zIndex: 4, background: 'var(--bg-secondary)' }}>Roll No.</th>
+                        <th style={{ ...thStyle, textAlign: 'left', width: 240, minWidth: 240, position: 'sticky', left: 110, zIndex: 4, background: 'var(--bg-secondary)' }}>Student</th>
+                        {registerData.columns.map((column) => (
+                          <th key={column.session_id} style={thStyle}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 }}>
+                              <span style={{ fontWeight: 700 }}>
+                                {new Date(column.date).toLocaleDateString(undefined, { day: '2-digit', month: 'short' })}
+                              </span>
+                              <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                {new Date(column.date).toLocaleDateString(undefined, { weekday: 'short' })}
+                              </span>
+                            </div>
+                          </th>
+                        ))}
+                        <th style={{ ...thStyle, minWidth: 90 }}>%</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {registerData.register.map((r, i) => (
-                        <tr key={r.student_id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                          <td style={tdStyle}>{i + 1}</td>
-                          <td style={{ ...tdStyle, textAlign: 'left', fontWeight: 500 }}>{r.full_name}</td>
-                          <td style={{ ...tdStyle, textAlign: 'left', fontFamily: 'monospace', fontSize: 12 }}>{r.email}</td>
-                          <td style={tdStyle}>
-                            <span style={{
-                              fontFamily: 'monospace', fontSize: 11, padding: '2px 6px', borderRadius: 4,
-                              background: r.device_id === 'NOT BOUND' ? 'var(--error-bg)' : 'var(--bg-secondary)',
-                              color: r.device_id === 'NOT BOUND' ? 'var(--error)' : 'var(--text-secondary)',
-                            }}>{r.device_id === 'NOT BOUND' ? '⚠ NOT BOUND' : r.device_id.slice(0, 16) + '…'}</span>
+                      {registerData.rows.map((student) => (
+                        <tr key={student.student_id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td style={{ ...tdStyle, width: 110, minWidth: 110, position: 'sticky', left: 0, zIndex: 3, background: 'var(--bg-color)', fontWeight: 700 }}>
+                            <button
+                              className="btn-ghost"
+                              style={{ padding: 0, color: 'var(--accent-primary)', fontWeight: 700, minHeight: 'auto' }}
+                              onClick={() => jumpToStudentDetails(student.student_id)}
+                              title={`Open ${student.full_name} in Students tab`}
+                            >
+                              {student.roll_no}
+                            </button>
                           </td>
-                          <td style={tdStyle}>
-                            <span className={`status-pill ${r.status === 'Present' ? 'success' : r.status === 'Out of Bounds' ? 'warning' : 'error'}`}>
-                              {r.status}
-                            </span>
+                          <td style={{ ...tdStyle, textAlign: 'left', width: 240, minWidth: 240, position: 'sticky', left: 110, zIndex: 2, background: 'var(--bg-color)' }}>
+                            {student.full_name}
                           </td>
-                          <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 12 }}>{r.scan_time ? new Date(r.scan_time).toLocaleTimeString() : '—'}</td>
-                          <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 11 }}>
-                            {r.scan_lat ? `${r.scan_lat.toFixed(4)}, ${r.scan_lon?.toFixed(4)}` : '—'}
+                          {student.records.map((record) => {
+                            const tone = getMatrixStatusTone(record.status);
+                            return (
+                              <td key={record.session_id} style={{ ...tdStyle, minWidth: 110 }}>
+                                <span style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  minWidth: 72,
+                                  borderRadius: 999,
+                                  padding: '4px 10px',
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  background: tone.background,
+                                  color: tone.text,
+                                }}>
+                                  {tone.label}
+                                </span>
+                              </td>
+                            );
+                          })}
+                          <td style={{ ...tdStyle, fontWeight: 700 }}>
+                            {student.attendance_rate}%
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                              {student.total_attended}/{student.total_classes}
+                            </div>
                           </td>
                         </tr>
                       ))}
-                      {registerData.register.length === 0 && (
-                        <tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: 'var(--text-placeholder)', padding: 32 }}>No students enrolled in this session.</td></tr>
+                      {registerData.rows.length === 0 && (
+                        <tr>
+                          <td colSpan={registerData.columns.length + 3} style={{ ...tdStyle, textAlign: 'center', color: 'var(--text-placeholder)', padding: 32 }}>
+                            No students enrolled in this session.
+                          </td>
+                        </tr>
                       )}
                     </tbody>
                   </table>
@@ -358,62 +685,114 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ═══ ANALYTICS TAB ═══ */}
-        {activeTab === 'analytics' && (
-          <div>
-            <div className="form-group" style={{ maxWidth: 400, marginBottom: 24 }}>
-              <label style={{ fontSize: 13 }}>Select Session</label>
-              <select className="input-base" value={analyticsSessionId} onChange={e => { if (e.target.value) loadAnalytics(e.target.value); }}>
-                <option value="">Choose a session…</option>
-                {sessions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+        {/* ═══ STUDENTS TAB ═══ */}
+        {activeTab === 'students' && (
+          <div className="animate-fade-in">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}><Users size={16} color="var(--text-secondary)" /> Session Students</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <p className="text-secondary" style={{ fontSize: 13 }}>{studentsData?.total_enrolled || 0} students in selected class</p>
+                {selectedStudentsSession && (
+                  <span className="text-secondary" style={{ fontSize: 12 }}>
+                    {selectedStudentsSession.name} • {new Date(selectedStudentsSession.start_time).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </span>
+                )}
+                <span className="status-pill success">Admin-only editing</span>
+              </div>
             </div>
 
-            {analytics ? (
-              <div className="animate-fade-in">
-                <h2 style={{ fontSize: 18, marginBottom: 20 }}>{analytics.session_name}</h2>
-                {/* Stat cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 32 }}>
-                  <StatCard label="Enrollment" value={analytics.total_enrolled} icon={<Users size={20} />} />
-                  <StatCard label="Present" value={analytics.total_present} icon={<ShieldCheck size={20} />} color="var(--success)" />
-                  <StatCard label="Absent" value={analytics.total_absent} icon={<X size={20} />} color="var(--error)" />
-                  <StatCard label="Out of Bounds" value={analytics.total_out_of_bounds} icon={<MapPin size={20} />} color="#d29922" />
-                  <StatCard label="Attendance Rate" value={`${analytics.attendance_rate}%`} icon={<Activity size={20} />} color="var(--accent-primary)" />
-                </div>
-                {/* Attendance bar */}
-                <div className="notion-block has-border" style={{ padding: 20, background: 'var(--bg-color)' }}>
-                  <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Attendance Distribution</p>
-                  <div style={{ height: 32, borderRadius: 8, overflow: 'hidden', display: 'flex', background: 'var(--bg-secondary)' }}>
-                    {analytics.total_enrolled > 0 && (
-                      <>
-                        <div style={{ width: `${analytics.attendance_rate}%`, background: 'var(--success)', transition: 'width 0.6s ease' }}></div>
-                        {analytics.total_out_of_bounds > 0 && (
-                          <div style={{ width: `${(analytics.total_out_of_bounds / analytics.total_enrolled) * 100}%`, background: '#d29922' }}></div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 12 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--success)', display: 'inline-block' }}></span> Present</span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: '#d29922', display: 'inline-block' }}></span> Out of Bounds</span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--bg-secondary)', display: 'inline-block' }}></span> Absent</span>
-                  </div>
-                </div>
-                {analytics.geofence && (
-                  <div className="notion-block has-border" style={{ padding: 16, marginTop: 12, background: 'var(--bg-color)', fontSize: 13 }}>
-                    <p style={{ fontWeight: 600, marginBottom: 4 }}><MapPin size={14} style={{ verticalAlign: -2 }} /> Geofence Configuration</p>
-                    <p className="text-secondary">Center: {analytics.geofence.lat.toFixed(5)}, {analytics.geofence.lon.toFixed(5)} — Radius: {analytics.geofence.radius_m}m</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="notion-block has-border flex-center" style={{ padding: 48, background: 'var(--bg-color)' }}>
-                <div style={{ textAlign: 'center', color: 'var(--text-placeholder)' }}>
-                  <BarChart3 size={40} strokeWidth={1} style={{ margin: '0 auto 12px' }} />
-                  <p>Select a session to view analytics.</p>
-                </div>
+            {studentMessage && (
+              <div className="alert animate-fade-in" style={{ marginBottom: 16, background: 'var(--success-bg)', color: 'var(--success)', border: '1px solid rgba(15, 123, 108, 0.2)' }}>
+                {studentMessage}
               </div>
             )}
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'end', flexWrap: 'wrap' }}>
+              <div className="form-group" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
+                <label style={{ fontSize: 13 }}>Select Session</label>
+                <select className="input-base" value={studentsSessionId} onChange={e => { if (e.target.value) loadStudentsForSession(e.target.value); }}>
+                  <option value="">Choose a session…</option>
+                  {sessions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              {studentsSessionId && (
+                <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => loadStudentsForSession(studentsSessionId)}>
+                  <RefreshCw size={13} /> Refresh
+                </button>
+              )}
+            </div>
+
+            <div className="notion-block has-border" style={{ background: 'var(--bg-color)' }}>
+              {studentsData ? (
+                studentsData.register.length > 0 ? (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+                        <th style={thStyle}>#</th>
+                        <th style={{ ...thStyle, textAlign: 'left' }}>Roll No</th>
+                        <th style={{ ...thStyle, textAlign: 'left' }}>Student</th>
+                        <th style={{ ...thStyle, textAlign: 'left' }}>Email</th>
+                        <th style={{ ...thStyle, textAlign: 'left' }}>Class</th>
+                        <th style={thStyle}>Device ID</th>
+                        <th style={thStyle}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {studentsData.register.map((s, index) => {
+                        const isHighlighted = highlightStudentId === s.student_id;
+                        return (
+                          <tr
+                            key={s.student_id}
+                            id={`student-${s.student_id}`}
+                            style={{
+                              borderBottom: '1px solid var(--border-color)',
+                              background: isHighlighted ? 'rgba(46, 170, 220, 0.08)' : 'transparent',
+                            }}
+                          >
+                            <td style={tdStyle}>{index + 1}</td>
+                            <td style={{ ...tdStyle, textAlign: 'left', fontWeight: 700, color: 'var(--accent-primary)' }}>{s.roll_no}</td>
+                            <td style={{ ...tdStyle, textAlign: 'left' }}>
+                              <div style={{ fontWeight: 600 }}>{s.full_name}</div>
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: 'left', fontFamily: 'monospace', fontSize: 12 }}>{s.email}</td>
+                            <td style={{ ...tdStyle, textAlign: 'left' }}>
+                              {selectedStudentsSession?.name || studentsData.session_name}
+                            </td>
+                            <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 11, maxWidth: 160, wordBreak: 'break-all' }}>{s.device_id}</td>
+                            <td style={tdStyle}>
+                              <button className="btn-ghost" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => openStudentEditor({
+                                student_id: s.student_id,
+                                full_name: s.full_name,
+                                roll_no: s.roll_no,
+                                email: s.email,
+                                device_id: s.device_id,
+                              })}>
+                                Edit
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {studentsData.register.length === 0 && (
+                        <tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: 'var(--text-placeholder)', padding: 32 }}>No students enrolled in this session.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                ) : (
+                  <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-placeholder)' }}>
+                    <Users size={32} style={{ margin: '0 auto 12px' }} />
+                    <p>No students enrolled in this session.</p>
+                  </div>
+                )
+              ) : (
+                <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-placeholder)' }}>
+                  <Users size={32} style={{ margin: '0 auto 12px' }} />
+                  <p>Select a session to view its students.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -464,6 +843,8 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+        </>
+        )}
       </div>
 
       {/* ═══ CREATE SESSION MODAL ═══ */}
@@ -471,7 +852,7 @@ export default function Dashboard() {
         <div style={modalOverlay}>
           <div className="notion-block has-border animate-fade-in" style={{ ...modalBox, maxWidth: 440 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-              <h2 style={{ fontSize: 18 }}>New Session</h2>
+              <h2 style={{ fontSize: 20, fontWeight: 600 }}>New Session</h2>
               <button className="btn-ghost" onClick={() => setShowCreate(false)}><X size={18} /></button>
             </div>
             <form onSubmit={handleCreateSession}>
@@ -501,9 +882,129 @@ export default function Dashboard() {
             </div>
             {enrollMsg && <div className={`alert ${enrollMsg.includes('success') ? 'alert-success' : 'alert-error'} animate-fade-in`} style={{ marginBottom: 16 }}>{enrollMsg}</div>}
             <form onSubmit={handleEnroll}>
-              <div className="form-group"><label>Student Email</label><input className="input-base" type="email" placeholder="student@institution.edu" value={enrollEmail} onChange={e => setEnrollEmail(e.target.value)} required /></div>
-              <button type="submit" className="btn-primary" style={{ width: '100%', padding: '10px' }} disabled={enrolling}>{enrolling ? 'Enrolling…' : 'Enroll Student'}</button>
+              <div className="form-group"><label>Student Emails (comma or newline separated)</label><textarea className="input-base" style={{ minHeight: '100px', resize: 'vertical' }} placeholder="student@institution.edu&#10;another@institution.edu" value={enrollEmails} onChange={e => setEnrollEmails(e.target.value)} required /></div>
+              <button type="submit" className="btn-primary" style={{ width: '100%', padding: '10px' }} disabled={enrolling}>{enrolling ? 'Enrolling…' : 'Enroll Students'}</button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {editingStudent && (
+        <div style={modalOverlay}>
+          <div className="notion-block has-border animate-fade-in" style={{ ...modalBox, maxWidth: 440 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+              <div>
+                <h2 style={{ fontSize: 18, margin: 0 }}>Edit Student</h2>
+                <p className="text-secondary" style={{ fontSize: 12, marginTop: 4 }}>
+                  Only admin/teacher users can change student data.
+                </p>
+              </div>
+              <button className="btn-ghost" onClick={closeStudentEditor}><X size={18} /></button>
+            </div>
+            <form onSubmit={handleStudentUpdate}>
+              <div className="form-group">
+                <label>Roll Number</label>
+                <input
+                  className="input-base"
+                  value={editForm.roll_no}
+                  onChange={(e) => setEditForm((current) => ({ ...current, roll_no: e.target.value }))}
+                  placeholder="e.g. 4036/23"
+                  pattern="[A-Za-z0-9][A-Za-z0-9/\-]{0,49}"
+                  title="Use letters, numbers, '/' or '-' only."
+                />
+              </div>
+              <div className="form-group">
+                <label>Email</label>
+                <input
+                  type="email"
+                  className="input-base"
+                  value={editForm.email}
+                  onChange={(e) => setEditForm((current) => ({ ...current, email: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Device ID</label>
+                <input
+                  className="input-base"
+                  value={editForm.device_id}
+                  onChange={(e) => setEditForm((current) => ({ ...current, device_id: e.target.value }))}
+                  placeholder="Leave blank to unbind the device"
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button type="button" className="btn-ghost" onClick={closeStudentEditor}>Cancel</button>
+                <button type="submit" className="btn-primary" disabled={savingStudent}>
+                  {savingStudent ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ FULL-SCREEN PROJECTION MODAL ═══ */}
+      {qrPayload && activeSessionId && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--bg-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <button className="btn-ghost" style={{ position: 'absolute', top: 24, right: 24, fontSize: 14 }} onClick={() => { setQrPayload(null); setActiveSessionId(null); }}>
+            <X size={20} /> Close Projection
+          </button>
+          
+          <div className="animate-fade-in" style={{ textAlign: 'center', padding: 24, maxWidth: 800, width: '100%' }}>
+            {/* Massive Session Title */}
+            <h1 style={{ fontSize: '3rem', fontWeight: 800, marginBottom: 40, letterSpacing: '-0.03em' }}>
+              {sessions.find(s => s.id === activeSessionId)?.name || "Live Session"}
+            </h1>
+
+            {/* Large Countdown Timer for Students */}
+            {timeLeft !== null && (
+              <div style={{ marginBottom: 40 }}>
+                <div style={{
+                  display: 'inline-block',
+                  padding: '16px 40px',
+                  background: timeLeft > 0 ? (timeLeft <= 60 ? 'var(--error-bg)' : 'var(--bg-color)') : 'var(--error-bg)',
+                  border: `2px solid ${timeLeft > 0 ? (timeLeft <= 60 ? 'var(--error)' : 'var(--border-color)') : 'var(--error)'}`,
+                  borderRadius: 'var(--radius-lg)',
+                  boxShadow: 'var(--shadow-md)',
+                }}>
+                  <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {timeLeft > 0 ? 'Scanning Window Closes In' : 'Attendance Closed'}
+                  </p>
+                  <p style={{ 
+                    fontSize: 72, 
+                    fontWeight: 800, 
+                    fontFamily: 'monospace',
+                    color: timeLeft > 0 ? (timeLeft <= 60 ? 'var(--error)' : 'var(--text-primary)') : 'var(--error)',
+                    lineHeight: 1,
+                    margin: 0
+                  }}>
+                    {timeLeft > 0 ? formatTime(timeLeft) : '0:00'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div style={{ background: '#fff', padding: 32, borderRadius: 24, display: 'inline-block', boxShadow: 'var(--shadow-md)', border: '1px solid var(--border-color)' }}>
+              <QRCodeSVG value={JSON.stringify(qrPayload)} size={380} level="H" bgColor="#fff" fgColor="#37352f" />
+            </div>
+            
+            <div style={{ marginTop: 40 }}>
+              <p style={{ letterSpacing: '0.08em', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>SCAN WITH QUICKSCAN APP</p>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginTop: 12 }}>
+                <p className="text-secondary" style={{ fontSize: 16, fontFamily: 'monospace', background: 'var(--bg-color)', padding: '4px 12px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>Token: {qrPayload.timestamp}</p>
+                <p style={{ fontSize: 16, fontFamily: 'monospace', background: 'var(--accent-primary)', color: '#fff', fontWeight: 600, padding: '4px 12px', borderRadius: 'var(--radius-sm)' }}>Code: {sessions.find(s => s.id === activeSessionId)?.enrollment_code}</p>
+              </div>
+              
+              {qrPayload.class_lat && (
+                <div className="status-pill success" style={{ marginTop: 16, fontSize: 14, padding: '6px 16px' }}>
+                  <ShieldCheck size={16} /> Geofence Active
+                </div>
+              )}
+            </div>
+            
+            <button className="btn-ghost" style={{ marginTop: 40, fontSize: 16, color: 'var(--text-secondary)' }} onClick={() => generateQR(activeSessionId, true)}>
+              <RefreshCw size={16} /> Restart 5-Min Timer
+            </button>
           </div>
         </div>
       )}
@@ -514,12 +1015,41 @@ export default function Dashboard() {
 // ── Helpers ──
 function StatCard({ label, value, icon, color }: { label: string; value: number | string; icon: React.ReactNode; color?: string }) {
   return (
-    <div className="notion-block has-border" style={{ padding: '20px 16px', textAlign: 'center', background: 'var(--bg-color)' }}>
-      <div style={{ color: color || 'var(--text-secondary)', margin: '0 auto 8px' }}>{icon}</div>
-      <p style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, color: color || 'var(--text-primary)' }}>{value}</p>
-      <p className="text-secondary" style={{ fontSize: 11, marginTop: 4 }}>{label}</p>
+    <div className="notion-block" style={{ padding: '24px 16px', textAlign: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
+      <div style={{ color: color || 'var(--text-secondary)', margin: '0 auto 12px' }}>{icon}</div>
+      <p style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, color: color || 'var(--text-primary)' }}>{value}</p>
+      <p className="text-secondary" style={{ fontSize: 13, marginTop: 8, fontWeight: 500 }}>{label}</p>
     </div>
   );
+}
+
+function getMatrixStatusTone(status: string | null) {
+  if (status === 'Present') {
+    return {
+      label: 'Present',
+      background: 'rgba(15, 123, 108, 0.08)',
+      text: 'var(--success)',
+    };
+  }
+  if (status === 'Leave') {
+    return {
+      label: 'Leave',
+      background: 'rgba(214, 162, 32, 0.12)',
+      text: '#8a6b00',
+    };
+  }
+  if (status === 'Absent') {
+    return {
+      label: 'Absent',
+      background: 'rgba(224, 62, 62, 0.08)',
+      text: 'var(--error)',
+    };
+  }
+  return {
+    label: '—',
+    background: 'rgba(55, 53, 47, 0.06)',
+    text: 'var(--text-secondary)',
+  };
 }
 
 const thStyle: React.CSSProperties = { padding: '10px 12px', fontWeight: 600, fontSize: 12, textAlign: 'center', whiteSpace: 'nowrap' };

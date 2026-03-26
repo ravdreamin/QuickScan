@@ -1,4 +1,6 @@
 import uuid
+import random
+import string
 from datetime import datetime
 from sqlalchemy import String, DateTime, ForeignKey, Float, Integer
 from sqlalchemy.orm import Mapped, mapped_column
@@ -13,6 +15,15 @@ class Session(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    enrollment_code: Mapped[str] = mapped_column(
+        String(10), 
+        unique=True, 
+        index=True, 
+        default=lambda: "".join(random.choices(string.ascii_uppercase + string.digits, k=6)),
+        nullable=False,
+        server_default="MIGRATION"
+    )
 
     # Using timezone-aware datetimes is critical for attendance logic
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

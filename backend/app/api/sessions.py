@@ -16,15 +16,17 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 
 from app.db.session import get_db
-from app.models.user import User, UserRole
 from app.models.session import Session
+from app.models.user import User, UserRole
 from app.models.enrollment import Enrollment
 from app.models.attendance import Attendance
 from app.api.deps import get_current_user, require_teacher
+from app.core.roll_no import normalize_roll_no
 
 
 class CreateSessionRequest(BaseModel):
@@ -39,8 +41,45 @@ class CreateSessionRequest(BaseModel):
 class EnrollRequest(BaseModel):
     student_email: str
 
+class BulkEnrollRequest(BaseModel):
+    student_emails: list[str]
+
+class JoinSessionRequest(BaseModel):
+    code: str
+
+
+class StudentUpdateRequest(BaseModel):
+    roll_no: str | None = None
+    email: str | None = None
+    device_id: str | None = None
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
+
+
+def _pick_best_attendance(records: list[Attendance]) -> dict[UUID, Attendance]:
+    record_map: dict[UUID, Attendance] = {}
+    for record in records:
+        if record.session_id not in record_map or record.status == "Present":
+            record_map[record.session_id] = record
+    return record_map
+
+
+def _attendance_priority(status: str) -> int:
+    if status == "Present":
+        return 3
+    if status == "Leave":
+        return 2
+    if status == "Out of Bounds":
+        return 1
+    return 0
+
+
+def _status_for_matrix(status: str) -> str:
+    if status == "Present":
+        return "Present"
+    if status == "Leave":
+        return "Leave"
+    return "Absent"
 
 
 @router.post("")
@@ -66,6 +105,7 @@ async def create_session(
     return {
         "id": str(session.id),
         "name": session.name,
+        "enrollment_code": session.enrollment_code,
         "start_time": session.start_time.isoformat(),
         "end_time": session.end_time.isoformat(),
         "latitude": session.latitude,
@@ -96,6 +136,7 @@ async def list_my_sessions(
         {
             "id": str(s.id),
             "name": s.name,
+            "enrollment_code": s.enrollment_code,
             "start_time": s.start_time.isoformat(),
             "end_time": s.end_time.isoformat(),
             "latitude": s.latitude,
@@ -104,6 +145,119 @@ async def list_my_sessions(
         }
         for s in sessions
     ]
+
+
+@router.get("/student/stats")
+async def get_student_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Returns the student's attendance stats grouped by session name.
+    """
+    if current_user.role == UserRole.TEACHER:
+        raise HTTPException(status_code=403, detail="Only students can view these stats.")
+
+    session_query = (
+        select(Session)
+        .join(Enrollment, Enrollment.session_id == Session.id)
+        .where(Enrollment.student_id == current_user.id)
+        .order_by(Session.start_time.desc())
+    )
+    session_result = await db.execute(session_query)
+    sessions = session_result.scalars().all()
+
+    session_ids = [session.id for session in sessions]
+    attendance_map: dict[UUID, Attendance] = {}
+    if session_ids:
+        attendance_query = select(Attendance).where(
+            Attendance.student_id == current_user.id,
+            Attendance.session_id.in_(session_ids),
+        )
+        attendance_result = await db.execute(attendance_query)
+        attendance_records = attendance_result.scalars().all()
+        attendance_map = _pick_best_attendance(attendance_records)
+
+    stats: dict[str, dict[str, int]] = {}
+    total_classes: int = 0
+    total_attended: int = 0
+    attendance_register = []
+
+    for session in sessions:
+        attendance = attendance_map.get(session.id)
+        status = attendance.status if attendance else "Absent"
+        name = session.name
+        if name not in stats:
+            stats[name] = {"total_classes": 0, "attended": 0, "missed": 0}
+
+        stats[name]["total_classes"] += 1
+        total_classes += 1
+
+        if status == "Present":
+            stats[name]["attended"] += 1
+            total_attended += 1
+        else:
+            stats[name]["missed"] += 1
+
+        attendance_register.append({
+            "session_id": str(session.id),
+            "session_name": session.name,
+            "date": session.start_time.isoformat(),
+            "status": status,
+            "scan_time": attendance.timestamp.isoformat() if attendance else None,
+            "roll_no": current_user.roll_no or "N/A",
+            "email": current_user.email,
+            "device_id": current_user.device_id or "NOT BOUND",
+        })
+
+    return {
+        "profile": {
+            "student_id": str(current_user.id),
+            "full_name": current_user.full_name,
+            "email": current_user.email,
+            "roll_no": current_user.roll_no or "N/A",
+            "device_id": current_user.device_id or "NOT BOUND",
+        },
+        "overall": {
+            "total_classes": total_classes,
+            "total_attended": total_attended,
+            "total_missed": total_classes - total_attended,
+        },
+        "by_course": [{"course_name": k, **v} for k, v in stats.items()],
+        "attendance_register": attendance_register,
+    }
+
+
+@router.post("/join")
+async def join_session(
+    payload: JoinSessionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Only students can join sessions via code.")
+
+    code_upper = payload.code.strip().upper()
+    result = await db.execute(select(Session).where(Session.enrollment_code == code_upper))
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Invalid enrollment code. Session not found.")
+
+    result = await db.execute(
+        select(Enrollment).where(
+            Enrollment.student_id == current_user.id,
+            Enrollment.session_id == session.id,
+        )
+    )
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="You are already enrolled in this session.")
+
+    enrollment = Enrollment(student_id=current_user.id, session_id=session.id)
+    db.add(enrollment)
+    await db.commit()
+
+    return {"message": f"Successfully joined {session.name}!", "session_id": str(session.id)}
 
 
 @router.post("/{session_id}/enroll")
@@ -141,6 +295,203 @@ async def enroll_student(
     return {"message": f"{student.full_name} enrolled successfully", "student_email": student.email}
 
 
+@router.post("/{session_id}/enroll/bulk")
+async def bulk_enroll_students(
+    session_id: UUID,
+    payload: BulkEnrollRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_teacher),
+):
+    result = await db.execute(select(Session).where(Session.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.instructor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your session")
+
+    # Get all users by emails
+    result = await db.execute(select(User).where(User.email.in_(payload.student_emails)))
+    students = result.scalars().all()
+    
+    if not students:
+        raise HTTPException(status_code=404, detail="No users found with the provided emails")
+
+    student_ids = [student.id for student in students]
+    result = await db.execute(
+        select(Enrollment).where(
+            Enrollment.student_id.in_(student_ids),
+            Enrollment.session_id == session_id,
+        )
+    )
+    existing_enrollments = {e.student_id for e in result.scalars().all()}
+
+    new_enrollments = []
+    enrolled_emails = []
+    for student in students:
+        if student.id not in existing_enrollments:
+            new_enrollments.append(Enrollment(student_id=student.id, session_id=session_id))
+            enrolled_emails.append(student.email)
+
+    if new_enrollments:
+        db.add_all(new_enrollments)
+        await db.commit()
+
+    return {
+        "message": f"Successfully enrolled {len(new_enrollments)} new students.",
+        "enrolled_emails": enrolled_emails,
+        "not_found_count": len(payload.student_emails) - len(students),
+        "already_enrolled_count": len(students) - len(new_enrollments)
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /sessions/{session_id}/attendance/matrix — Date-wise class register
+# ---------------------------------------------------------------------------
+@router.get("/{session_id}/attendance/matrix")
+async def get_session_attendance_matrix(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_teacher),
+):
+    # Verify ownership of selected class/session
+    selected_session_q = select(Session).where(Session.id == session_id)
+    selected_session_res = await db.execute(selected_session_q)
+    selected_session = selected_session_res.scalar_one_or_none()
+    if not selected_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if selected_session.instructor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your session")
+
+    # A class register spans all teacher sessions with the same class name.
+    class_sessions_q = (
+        select(Session)
+        .where(
+            Session.instructor_id == current_user.id,
+            Session.name == selected_session.name,
+        )
+        .order_by(Session.start_time.asc())
+    )
+    class_sessions_result = await db.execute(class_sessions_q)
+    class_sessions = class_sessions_result.scalars().all()
+    class_session_ids = [sess.id for sess in class_sessions]
+
+    # Students are scoped to the selected class/session only.
+    students_q = (
+        select(User.id, User.roll_no, User.full_name, User.email, User.device_id)
+        .join(Enrollment, Enrollment.student_id == User.id)
+        .where(Enrollment.session_id == session_id)
+    )
+    students_result = await db.execute(students_q)
+    students = students_result.all()
+
+    if not class_sessions:
+        return {
+            "session_id": str(session_id),
+            "session_name": selected_session.name,
+            "columns": [],
+            "rows": [],
+            "summary": {"total_students": 0, "total_dates": 0},
+        }
+
+    if not students:
+        return {
+            "session_id": str(session_id),
+            "session_name": selected_session.name,
+            "columns": [
+                {
+                    "session_id": str(sess.id),
+                    "date": sess.start_time.isoformat(),
+                }
+                for sess in class_sessions
+            ],
+            "rows": [],
+            "summary": {"total_students": 0, "total_dates": len(class_sessions)},
+        }
+
+    student_ids = [student_id for student_id, *_ in students]
+
+    enrollments_q = select(Enrollment.student_id, Enrollment.session_id).where(
+        Enrollment.student_id.in_(student_ids),
+        Enrollment.session_id.in_(class_session_ids),
+    )
+    enrollments_result = await db.execute(enrollments_q)
+    enrollments = enrollments_result.all()
+    enrollment_pairs = {(student_id, class_session_id) for student_id, class_session_id in enrollments}
+
+    attendance_q = select(Attendance).where(
+        Attendance.student_id.in_(student_ids),
+        Attendance.session_id.in_(class_session_ids),
+    )
+    attendance_result = await db.execute(attendance_q)
+    attendance_records = attendance_result.scalars().all()
+
+    attendance_map: dict[tuple[UUID, UUID], Attendance] = {}
+    for record in attendance_records:
+        key = (record.student_id, record.session_id)
+        existing = attendance_map.get(key)
+        if not existing or _attendance_priority(record.status) > _attendance_priority(existing.status):
+            attendance_map[key] = record
+
+    columns = [
+        {
+            "session_id": str(sess.id),
+            "date": sess.start_time.isoformat(),
+        }
+        for sess in class_sessions
+    ]
+
+    rows = []
+    for student_id, roll_no, full_name, email, device_id in students:
+        total_classes = 0
+        total_present = 0
+
+        records = []
+        for sess in class_sessions:
+            is_enrolled = (student_id, sess.id) in enrollment_pairs
+            if not is_enrolled:
+                records.append({
+                    "session_id": str(sess.id),
+                    "status": None,
+                })
+                continue
+
+            total_classes += 1
+            attendance = attendance_map.get((student_id, sess.id))
+            status = _status_for_matrix(attendance.status if attendance else "Absent")
+            if status == "Present":
+                total_present += 1
+            records.append({
+                "session_id": str(sess.id),
+                "status": status,
+            })
+
+        rows.append({
+            "student_id": str(student_id),
+            "roll_no": roll_no or "N/A",
+            "full_name": full_name,
+            "email": email,
+            "device_id": device_id or "NOT BOUND",
+            "total_classes": total_classes,
+            "total_attended": total_present,
+            "total_missed": total_classes - total_present,
+            "attendance_rate": round(total_present / total_classes * 100) if total_classes > 0 else 0,
+            "records": records,
+        })
+
+    rows.sort(key=lambda row: (row["roll_no"] == "N/A", row["roll_no"], row["full_name"]))
+
+    return {
+        "session_id": str(session_id),
+        "session_name": selected_session.name,
+        "columns": columns,
+        "rows": rows,
+        "summary": {
+            "total_students": len(rows),
+            "total_dates": len(columns),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # GET /sessions/{id}/attendance — Attendance register (like a class register)
 # ---------------------------------------------------------------------------
@@ -160,7 +511,7 @@ async def get_session_attendance(
 
     # Get all enrolled students
     enrolled_q = (
-        select(User.id, User.full_name, User.email, User.device_id)
+        select(User.id, User.full_name, User.email, User.device_id, User.roll_no)
         .join(Enrollment, Enrollment.student_id == User.id)
         .where(Enrollment.session_id == session_id)
     )
@@ -180,10 +531,11 @@ async def get_session_attendance(
 
     # Build register rows
     register = []
-    for student_id, full_name, email, device_id in enrolled_students:
+    for student_id, full_name, email, device_id, roll_no in enrolled_students:
         att = att_map.get(student_id)
         register.append({
             "student_id": str(student_id),
+            "roll_no": roll_no or "N/A",
             "full_name": full_name,
             "email": email,
             "device_id": device_id or "NOT BOUND",
@@ -331,56 +683,157 @@ async def export_attendance_excel(
 
 
 # ---------------------------------------------------------------------------
-# GET /sessions/{id}/analytics — Session analytics
+# GET /sessions/students/all — All students the teacher teaches
 # ---------------------------------------------------------------------------
-@router.get("/{session_id}/analytics")
-async def get_session_analytics(
-    session_id: UUID,
+@router.get("/students/all")
+async def get_all_my_students(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_teacher),
 ):
-    result = await db.execute(select(Session).where(Session.id == session_id))
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if session.instructor_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not your session")
+    teacher_sessions_q = select(Session).where(Session.instructor_id == current_user.id).order_by(Session.start_time.desc())
+    teacher_sessions_result = await db.execute(teacher_sessions_q)
+    teacher_sessions = teacher_sessions_result.scalars().all()
+    teacher_session_ids = [s.id for s in teacher_sessions]
 
-    # Counts
-    enrolled_count = await db.execute(
-        select(func.count()).select_from(Enrollment).where(Enrollment.session_id == session_id)
+    if not teacher_session_ids:
+        return []
+
+    # Get all students enrolled in any of the above sessions
+    students_q = (
+        select(User)
+        .join(Enrollment, Enrollment.student_id == User.id)
+        .where(Enrollment.session_id.in_(teacher_session_ids))
+        .distinct()
     )
-    total_enrolled = enrolled_count.scalar() or 0
+    students_result = await db.execute(students_q)
+    students = students_result.scalars().all()
 
-    present_count = await db.execute(
-        select(func.count()).select_from(Attendance).where(
-            Attendance.session_id == session_id,
-            Attendance.status == "Present",
+    # Get attendance for all these sessions
+    att_q = select(Attendance).where(Attendance.session_id.in_(teacher_session_ids))
+    att_result = await db.execute(att_q)
+    attendances = att_result.scalars().all()
+
+    enrollment_q = select(Enrollment).where(Enrollment.session_id.in_(teacher_session_ids))
+    enrollment_res = await db.execute(enrollment_q)
+    enrollments = enrollment_res.scalars().all()
+
+    stats = []
+    for s in students:
+        s_enrollments = [e for e in enrollments if e.student_id == s.id]
+        total_classes = len(s_enrollments)
+        s_att = [a for a in attendances if a.student_id == s.id and a.status == "Present"]
+        total_attended = len(s_att)
+        
+        # Build chronological history
+        history = []
+        for sess in teacher_sessions:
+            # Only include if they were enrolled
+            if any(e.session_id == sess.id for e in s_enrollments):
+                a_record = next((a for a in attendances if a.student_id == s.id and a.session_id == sess.id), None)
+                status = a_record.status if a_record else "Absent"
+                history.append({
+                    "session_id": str(sess.id),
+                    "session_name": sess.name,
+                    "date": sess.start_time.isoformat(),
+                    "status": status,
+                })
+
+        stats.append({
+            "student_id": str(s.id),
+            "roll_no": s.roll_no or "N/A",
+            "full_name": s.full_name,
+            "email": s.email,
+            "device_id": s.device_id or "NOT BOUND",
+            "total_classes": total_classes,
+            "total_attended": total_attended,
+            "total_missed": total_classes - total_attended,
+            "attendance_rate": round(total_attended / total_classes * 100) if total_classes > 0 else 0,
+            "history": history
+        })
+
+    return sorted(stats, key=lambda x: x["full_name"])
+
+
+# ---------------------------------------------------------------------------
+# PUT /sessions/students/{student_id} — Teacher updates student data
+# ---------------------------------------------------------------------------
+@router.put("/students/{student_id}")
+async def update_student(
+    student_id: UUID,
+    payload: StudentUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_teacher),
+):
+    # Verify the teacher actually teaches this student
+    teacher_sessions_q = select(Session.id).where(Session.instructor_id == current_user.id)
+    teacher_sessions_res = await db.execute(teacher_sessions_q)
+    teacher_sessions = [row[0] for row in teacher_sessions_res.all()]
+
+    if not teacher_sessions:
+        raise HTTPException(status_code=403, detail="You do not teach any sessions.")
+
+    ver_q = select(Enrollment).where(
+        Enrollment.student_id == student_id,
+        Enrollment.session_id.in_(teacher_sessions)
+    )
+    ver_res = await db.execute(ver_q)
+    if not ver_res.scalars().first():
+        raise HTTPException(status_code=403, detail="Student is not in any of your sessions.")
+
+    # Get user
+    user_q = select(User).where(User.id == student_id)
+    user_res = await db.execute(user_q)
+    student = user_res.scalar_one_or_none()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    if payload.roll_no is not None:
+        normalized_roll_no = normalize_roll_no(payload.roll_no, required=False)
+        if normalized_roll_no:
+            roll_no_owner_q = select(User.id).where(
+                User.roll_no == normalized_roll_no,
+                User.id != student_id,
+            )
+            roll_no_owner_res = await db.execute(roll_no_owner_q)
+            if roll_no_owner_res.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Roll number already registered.")
+        student.roll_no = normalized_roll_no
+    if payload.email is not None:
+        cleaned_email = payload.email.strip().lower()
+        if not cleaned_email:
+            raise HTTPException(status_code=400, detail="Email cannot be empty.")
+        email_owner_q = select(User.id).where(
+            User.email == cleaned_email,
+            User.id != student_id,
         )
-    )
-    total_present = present_count.scalar() or 0
+        email_owner_res = await db.execute(email_owner_q)
+        if email_owner_res.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Email already registered.")
+        student.email = cleaned_email
+    if payload.device_id is not None:
+        cleaned_device_id = payload.device_id.strip()
+        if cleaned_device_id.lower() in ["", "null", "none", "not bound"]:
+            student.device_id = None
+        else:
+            student.device_id = cleaned_device_id
 
-    oob_count = await db.execute(
-        select(func.count()).select_from(Attendance).where(
-            Attendance.session_id == session_id,
-            Attendance.status == "Out of Bounds",
-        )
-    )
-    total_oob = oob_count.scalar() or 0
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        err_text = str(exc.orig).lower() if getattr(exc, "orig", None) else str(exc).lower()
+        if "roll_no" in err_text:
+            raise HTTPException(status_code=400, detail="Roll number already registered.")
+        if "email" in err_text:
+            raise HTTPException(status_code=400, detail="Email already registered.")
+        raise HTTPException(status_code=400, detail="Student details could not be updated.")
 
     return {
-        "session_id": str(session_id),
-        "session_name": session.name,
-        "start_time": session.start_time.isoformat(),
-        "end_time": session.end_time.isoformat(),
-        "total_enrolled": total_enrolled,
-        "total_present": total_present,
-        "total_absent": total_enrolled - total_present,
-        "total_out_of_bounds": total_oob,
-        "attendance_rate": round((total_present / total_enrolled * 100), 1) if total_enrolled > 0 else 0,
-        "geofence": {
-            "lat": session.latitude,
-            "lon": session.longitude,
-            "radius_m": session.radius_meters,
-        } if session.latitude else None,
+        "message": "Student details updated successfully.",
+        "student": {
+            "id": str(student.id),
+            "roll_no": student.roll_no,
+            "email": student.email,
+            "device_id": student.device_id,
+        },
     }

@@ -8,10 +8,12 @@ Authentication routes:
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.core.security import verify_password, create_paseto_token, get_password_hash
+from app.core.roll_no import normalize_roll_no
 from app.schemas.auth import LoginRequest, TokenResponse, RegisterRequest
 from app.api.deps import get_current_user
 
@@ -61,6 +63,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "role": current_user.role.value,
         "device_id": current_user.device_id,
         "is_active": current_user.is_active,
+        "roll_no": current_user.roll_no,
     }
 
 
@@ -79,15 +82,31 @@ async def register_user(payload: RegisterRequest, db: AsyncSession = Depends(get
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid role. Must be TEACHER or STUDENT.")
 
+    normalized_roll_no = None
+    if assigned_role == UserRole.STUDENT:
+        normalized_roll_no = normalize_roll_no(payload.roll_no, required=True)
+        roll_no_query = select(User.id).where(User.roll_no == normalized_roll_no)
+        roll_no_result = await db.execute(roll_no_query)
+        if roll_no_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Roll number already registered.")
+
     new_user = User(
         email=payload.email,
         full_name=payload.full_name,
         hashed_password=get_password_hash(payload.password),
         role=assigned_role,
         device_id=payload.hardware_id,
+        roll_no=normalized_roll_no,
     )
     db.add(new_user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        err_text = str(exc.orig).lower() if getattr(exc, "orig", None) else str(exc).lower()
+        if "roll_no" in err_text:
+            raise HTTPException(status_code=400, detail="Roll number already registered.")
+        raise HTTPException(status_code=400, detail="Email already registered.")
     await db.refresh(new_user)
 
     return await _hardware_lock_and_token(new_user, payload.hardware_id, db)

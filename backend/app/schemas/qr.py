@@ -8,3 +8,4 @@ class QRResponse(BaseModel):
     hmac_signature: str
     class_lat: float | None = None
     class_lon: float | None = None
+    window_closes_at: int | None = None

@@ -22,6 +22,7 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.models.user import User
 from app.models.session import Session
+from app.models.ledger import AuditLedger
 from app.models.enrollment import Enrollment
 from app.models.attendance import Attendance
 from app.api.deps import require_student
@@ -58,6 +59,37 @@ async def scan_qr(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # ── Validation 1.5: 5-minute Session Attendance Limit ──────────────────────
+    window_query = (
+        select(AuditLedger.timestamp)
+        .where(
+            AuditLedger.target_id == session.id,
+            AuditLedger.action == "PROJECTION_STARTED"
+        )
+        .order_by(AuditLedger.timestamp.desc())
+        .limit(1)
+    )
+    result = await db.execute(window_query)
+    projection_start = result.scalar_one_or_none()
+
+    if not projection_start:
+        fallback_query = (
+            select(AuditLedger.timestamp)
+            .where(AuditLedger.target_id == session.id, AuditLedger.action == "QR_GENERATED")
+            .order_by(AuditLedger.timestamp.asc())
+            .limit(1)
+        )
+        res = await db.execute(fallback_query)
+        projection_start = res.scalar_one_or_none()
+
+    if projection_start:
+        elapsed = datetime.now(timezone.utc) - projection_start
+        if elapsed.total_seconds() > 300:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Attendance window successfully closed. You can no longer scan for this session.",
+            )
 
     # ── Validation 2: Cryptography ──────────────────────────────────────
     message = f"{session.id}{payload.qr_timestamp}"

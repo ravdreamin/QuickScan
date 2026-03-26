@@ -13,6 +13,7 @@ class RegisterRequest(BaseModel):
     password: str
     role: str # "TEACHER" or "STUDENT"
     hardware_id: str
+    roll_no: str | None = None
 
 
 class TokenResponse(BaseModel):

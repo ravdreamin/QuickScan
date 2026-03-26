@@ -9,6 +9,7 @@ export default function Register() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'student' | 'teacher'>('student');
+  const [rollNo, setRollNo] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -25,7 +26,7 @@ export default function Register() {
     setIsLoading(true);
     try {
       const { data } = await api.post('/auth/register', {
-        full_name: fullName, email, password, role, hardware_id: getHardwareId(),
+        full_name: fullName, email, password, role, hardware_id: getHardwareId(), roll_no: role === 'student' ? rollNo : undefined,
       });
       const me = await api.get('/auth/me', {
         headers: { Authorization: `Bearer ${data.access_token}` },
@@ -74,6 +75,21 @@ export default function Register() {
               <label>Full Name</label>
               <input type="text" className="input-base" placeholder="John Doe" value={fullName} onChange={e => setFullName(e.target.value)} required />
             </div>
+            {role === 'student' && (
+              <div className="form-group">
+                <label>Roll Number / Student ID</label>
+                <input
+                  type="text"
+                  className="input-base"
+                  placeholder="e.g. 4036/23"
+                  value={rollNo}
+                  onChange={e => setRollNo(e.target.value)}
+                  pattern="[A-Za-z0-9][A-Za-z0-9/\-]{0,49}"
+                  title="Use letters, numbers, '/' or '-' only."
+                  required
+                />
+              </div>
+            )}
             <div className="form-group">
               <label>Email</label>
               <input type="email" className="input-base" placeholder="you@institution.edu" value={email} onChange={e => setEmail(e.target.value)} required />
