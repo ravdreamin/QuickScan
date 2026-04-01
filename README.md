@@ -28,7 +28,7 @@ A secure, QR-based attendance system for classrooms. Teachers generate rotating 
 | Layer | Technology |
 |---|---|
 | Frontend | React 18, TypeScript, Vite, React Router, Framer Motion |
-| Backend | FastAPI (Python 3.12), SQLModel, Alembic |
+| Backend | FastAPI (Python 3.12), SQLAlchemy 2.0, Pydantic v2, Alembic |
 | Database | PostgreSQL 16 |
 | Cache / Rate Limit | Redis 7 |
 | Auth | PASETO tokens (stateless, secure) |
